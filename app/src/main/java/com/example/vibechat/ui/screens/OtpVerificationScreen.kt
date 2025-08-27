@@ -21,8 +21,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
+import com.example.vibechat.services.MyFirebaseMessagingService
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.PhoneAuthProvider
+import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.delay
 
 @Composable
@@ -151,19 +153,30 @@ fun OtpVerificationScreen(
                     val credential = PhoneAuthProvider.getCredential(verificationId, code)
                     auth.signInWithCredential(credential)
                         .addOnCompleteListener { task ->
-                            isLoading = false
                             if (task.isSuccessful) {
-                                val isNewUser = task.result?.additionalUserInfo?.isNewUser ?: false
-                                if (isNewUser) {
-                                    navController.navigate("createProfile") {
-                                        popUpTo("phoneLogin") { inclusive = true }
-                                    }
-                                } else {
-                                    navController.navigate("home") {
-                                        popUpTo("phoneLogin") { inclusive = true }
+                                val firebaseUser = task.result?.user
+                                if (firebaseUser != null) {
+                                    FirebaseMessaging.getInstance().token.addOnCompleteListener { tokenTask ->
+                                        isLoading = false
+                                        if (tokenTask.isSuccessful) {
+                                            val token = tokenTask.result
+                                            MyFirebaseMessagingService().saveTokenToFirestore(token, firebaseUser.uid)
+                                        }
+
+                                        val isNewUser = task.result?.additionalUserInfo?.isNewUser ?: false
+                                        if (isNewUser) {
+                                            navController.navigate("createProfile") {
+                                                popUpTo("phoneLogin") { inclusive = true }
+                                            }
+                                        } else {
+                                            navController.navigate("home") {
+                                                popUpTo("phoneLogin") { inclusive = true }
+                                            }
+                                        }
                                     }
                                 }
                             } else {
+                                isLoading = false
                                 errorMessage = "Código inválido. Tente novamente."
                             }
                         }
