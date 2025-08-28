@@ -55,6 +55,16 @@ fun ChatScreen(navController: NavController, name: String, receiverUid: String, 
     val receiverRoom = receiverUid + senderUid
 
     LaunchedEffect(Unit) {
+        val conversationRef = db.collection("users").document(senderUid)
+            .collection("conversations").document(receiverUid)
+
+        // Verifica se o documento existe antes de tentar atualizar
+        conversationRef.get().addOnSuccessListener { documentSnapshot ->
+            if (documentSnapshot.exists()) {
+                conversationRef.update("unreadCount", 0)
+            }
+        }
+
         // Verifica se o destinatário está na lista de contactos do utilizador
         db.collection("users").document(senderUid).collection("contacts").document(receiverUid).get()
             .addOnSuccessListener { document ->
@@ -93,6 +103,7 @@ fun ChatScreen(navController: NavController, name: String, receiverUid: String, 
                 }
             }
     }
+
 
     Scaffold(
         topBar = {

@@ -33,6 +33,7 @@ import com.google.firebase.firestore.Query
 fun HomeScreen(navController: NavController) {
     var showMenu by remember { mutableStateOf(false) }
     val auth = FirebaseAuth.getInstance()
+    var searchQuery by remember { mutableStateOf("") }
 
     Scaffold(
         topBar = {
@@ -84,23 +85,25 @@ fun HomeScreen(navController: NavController) {
         }
     ) { padding ->
         Column(modifier = Modifier.padding(padding)) {
-            SearchAndFilterSection()
-            ConversationsScreen(navController)
+            SearchAndFilterSection(
+                searchQuery = searchQuery,
+                onSearchQueryChange = { searchQuery = it }
+            )
+            ConversationsScreen(navController, searchQuery)
         }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SearchAndFilterSection() {
-    var searchQuery by remember { mutableStateOf("") }
+fun SearchAndFilterSection(searchQuery: String, onSearchQueryChange: (String) -> Unit) {
     var selectedFilter by remember { mutableStateOf("Todas") }
     val filters = listOf("Todas", "Não lidas", "Grupos")
 
     Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
         TextField(
             value = searchQuery,
-            onValueChange = { searchQuery = it },
+            onValueChange = onSearchQueryChange,
             placeholder = { Text("Pesquisar conversas...") },
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Pesquisar") },
             modifier = Modifier.fillMaxWidth(),
@@ -125,10 +128,20 @@ fun SearchAndFilterSection() {
 }
 
 @Composable
-fun ConversationsScreen(navController: NavController) {
+fun ConversationsScreen(navController: NavController, searchQuery: String) {
     var conversationList by remember { mutableStateOf<List<Conversation>>(emptyList()) }
     val auth = FirebaseAuth.getInstance()
     val db = FirebaseFirestore.getInstance()
+
+    val filteredList = remember(searchQuery, conversationList) {
+        if (searchQuery.isBlank()) {
+            conversationList
+        } else {
+            conversationList.filter {
+                it.partnerName.contains(searchQuery, ignoreCase = true)
+            }
+        }
+    }
 
     LaunchedEffect(Unit) {
         val currentUserUid = auth.currentUser?.uid
@@ -145,7 +158,7 @@ fun ConversationsScreen(navController: NavController) {
     }
 
     LazyColumn {
-        items(conversationList) { conversation ->
+        items(filteredList) { conversation ->
             ConversationItem(conversation = conversation, onClick = {
                 navController.navigate("chat/${conversation.partnerName}/${conversation.partnerId}?phone=${conversation.partnerPhoneNumber}")
             })
@@ -194,11 +207,30 @@ fun ConversationItem(conversation: Conversation, onClick: () -> Unit) {
             Text(text = conversation.lastMessage, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
         }
 
-        Text(
-            text = formatTimestamp(conversation.timestamp),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-        )
+        Column(horizontalAlignment = Alignment.End) {
+            Text(
+                text = formatTimestamp(conversation.timestamp),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+            )
+            if (conversation.unreadCount > 0) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Box(
+                    modifier = Modifier
+                        .size(24.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF25D366)), // Verde do WhatsApp
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = conversation.unreadCount.toString(),
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
     }
     Divider(modifier = Modifier.padding(start = 82.dp))
 }

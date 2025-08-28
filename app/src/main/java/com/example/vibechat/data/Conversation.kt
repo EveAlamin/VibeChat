@@ -8,5 +8,6 @@ data class Conversation(
     val partnerProfilePictureUrl: String? = null,
     val lastMessage: String = "",
     val timestamp: Timestamp = Timestamp.now(),
-    val partnerPhoneNumber: String = ""
+    val partnerPhoneNumber: String = "",
+    val unreadCount: Int = 0
 )
