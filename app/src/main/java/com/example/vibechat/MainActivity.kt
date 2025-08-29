@@ -20,6 +20,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.vibechat.ui.screens.*
 import com.example.vibechat.ui.theme.VibeChatTheme
+import com.example.vibechat.utils.PresenceManager // <-- ADICIONADO
 import com.google.firebase.auth.FirebaseAuth
 
 class MainActivity : ComponentActivity() {
@@ -41,6 +42,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         askNotificationPermission()
+
+        // Inicializa o gerenciador de presença assim que o app abre
+        PresenceManager.initialize() // <-- ADICIONADO
 
         setContent {
             VibeChatTheme {
@@ -128,5 +132,11 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    // Define o usuário como offline quando o app é completamente fechado
+    override fun onDestroy() { // <-- ADICIONADO
+        super.onDestroy()
+        PresenceManager.goOffline()
     }
 }

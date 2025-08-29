@@ -6,9 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -31,14 +29,20 @@ import com.example.vibechat.data.Conversation
 import com.example.vibechat.data.Message
 import com.example.vibechat.data.User
 import com.example.vibechat.repository.UserRepository
-// import com.example.vibechat.ui.theme.*
 import com.example.vibechat.utils.formatTimestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
 import com.google.firebase.Timestamp
+import com.google.firebase.database.DataSnapshot
+import com.google.firebase.database.DatabaseError
+import com.google.firebase.database.FirebaseDatabase
+import com.google.firebase.database.ValueEventListener
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 val BlueCheck = Color(0xFF34B7F1)
 
@@ -50,6 +54,10 @@ fun ChatScreen(navController: NavController, name: String, receiverUid: String, 
     var receiverUser by remember { mutableStateOf<User?>(null) }
     var isContact by remember { mutableStateOf(true) }
     var isBlocked by remember { mutableStateOf(false) }
+
+    // NOVO ESTADO PARA O STATUS DE PRESENÇA
+    var userStatus by remember { mutableStateOf("Offline") }
+
     val senderUid = FirebaseAuth.getInstance().currentUser?.uid!!
     val db = FirebaseFirestore.getInstance()
     val context = LocalContext.current
@@ -58,6 +66,35 @@ fun ChatScreen(navController: NavController, name: String, receiverUid: String, 
 
     val senderRoom = senderUid + receiverUid
     val receiverRoom = receiverUid + senderUid
+
+    // EFEITO PARA OBSERVAR O STATUS DO USUÁRIO NO REALTIME DATABASE
+    DisposableEffect(receiverUid) {
+        val statusRef = FirebaseDatabase.getInstance().getReference("/status/$receiverUid")
+        val listener = object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                if (snapshot.exists()) {
+                    val isOnline = snapshot.child("isOnline").getValue(Boolean::class.java) ?: false
+                    if (isOnline) {
+                        userStatus = "Online"
+                    } else {
+                        val lastSeen = snapshot.child("lastSeen").getValue(Long::class.java) ?: 0
+                        userStatus = "Visto por último: ${formatLastSeen(lastSeen)}"
+                    }
+                } else {
+                    userStatus = "Offline"
+                }
+            }
+            override fun onCancelled(error: DatabaseError) {
+                userStatus = "Offline" // Em caso de erro, assume offline
+            }
+        }
+        statusRef.addValueEventListener(listener)
+
+        // Limpa o listener quando o Composable é removido da tela
+        onDispose {
+            statusRef.removeEventListener(listener)
+        }
+    }
 
     DisposableEffect(senderRoom) {
         val conversationRef = db.collection("users").document(senderUid)
@@ -131,7 +168,16 @@ fun ChatScreen(navController: NavController, name: String, receiverUid: String, 
                             }
                         }
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text(name, color = Color.White)
+
+                        // ALTERAÇÃO PARA EXIBIR NOME E STATUS
+                        Column {
+                            Text(name, color = Color.White)
+                            Text(
+                                text = userStatus,
+                                color = Color.White.copy(alpha = 0.8f),
+                                fontSize = 12.sp
+                            )
+                        }
                     }
                 },
                 navigationIcon = {
@@ -179,13 +225,11 @@ fun ChatScreen(navController: NavController, name: String, receiverUid: String, 
                     )
                 }
 
-                // ***** INÍCIO DA CORREÇÃO *****
                 LazyColumn(
                     modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
-                    reverseLayout = true // Começa a renderizar de baixo para cima
+                    reverseLayout = true
                 ) {
-                    items(messageList.reversed()) { message -> // Inverte a lista para mostrar a mais recente em baixo
-                        // ***** FIM DA CORREÇÃO *****
+                    items(messageList.reversed()) { message ->
                         if (message.senderId == senderUid) {
                             SentMessageBubble(message = message)
                         } else {
@@ -325,7 +369,6 @@ private fun updateConversation(db: FirebaseFirestore, senderUid: String, receive
                 return@addOnSuccessListener
             }
 
-            // Lógica para a conversa do REMETENTE (quem envia)
             val senderConversation = Conversation(
                 partnerId = receiverUid,
                 partnerName = receiverCustomName,
@@ -337,7 +380,6 @@ private fun updateConversation(db: FirebaseFirestore, senderUid: String, receive
             )
             senderDocRef.collection("conversations").document(receiverUid).set(senderConversation)
 
-            // Lógica para a conversa do DESTINATÁRIO (quem recebe) - AGORA NO CLIENTE
             val receiverConversationRef = receiverDocRef.collection("conversations").document(senderUid)
 
             val receiverUpdateMap = mapOf(
@@ -347,7 +389,7 @@ private fun updateConversation(db: FirebaseFirestore, senderUid: String, receive
                 "lastMessage" to lastMessage,
                 "timestamp" to Timestamp.now(),
                 "partnerPhoneNumber" to (senderUser.phoneNumber ?: ""),
-                "unreadCount" to FieldValue.increment(1) // <-- Contagem de volta no app
+                "unreadCount" to FieldValue.increment(1)
             )
 
             receiverConversationRef.set(receiverUpdateMap, com.google.firebase.firestore.SetOptions.merge())
@@ -425,11 +467,10 @@ fun ReceivedMessageBubble(message: Message) {
 
 @Composable
 fun MessageStatusIcon(status: String) {
-    // Lógica para mostrar o ícone correto com base no status da mensagem
     val (icon, color) = when (status) {
         "READ" -> Icons.Default.DoneAll to BlueCheck
         "DELIVERED" -> Icons.Default.DoneAll to Color.Gray
-        else -> Icons.Default.Done to Color.Gray // "SENT" ou qualquer outro caso
+        else -> Icons.Default.Done to Color.Gray
     }
 
     Icon(
@@ -438,4 +479,11 @@ fun MessageStatusIcon(status: String) {
         modifier = Modifier.size(16.dp),
         tint = color
     )
+}
+
+private fun formatLastSeen(timestamp: Long): String {
+    if (timestamp == 0L) return "há muito tempo"
+
+    val sdf = SimpleDateFormat("dd/MM/yy 'às' HH:mm", Locale.getDefault())
+    return sdf.format(Date(timestamp))
 }

@@ -73,6 +73,7 @@ dependencies {
     implementation("com.google.firebase:firebase-firestore-ktx")
     implementation("com.google.firebase:firebase-storage-ktx")
     implementation("com.google.firebase:firebase-messaging-ktx")
+    implementation("com.google.firebase:firebase-database-ktx")
 
     // Glide para carregar imagens em Compose
     implementation("com.github.bumptech.glide:compose:1.0.0-beta01")
