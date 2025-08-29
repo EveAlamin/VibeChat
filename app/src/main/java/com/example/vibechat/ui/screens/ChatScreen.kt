@@ -29,7 +29,7 @@ import com.example.vibechat.data.Conversation
 import com.example.vibechat.data.Message
 import com.example.vibechat.data.User
 import com.example.vibechat.repository.UserRepository
-// import com.example.vibechat.ui.theme.* // Dependências de tema local não podem ser resolvidas aqui
+// import com.example.vibechat.ui.theme.*
 import com.example.vibechat.utils.formatTimestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FieldValue
@@ -38,7 +38,6 @@ import com.google.firebase.firestore.Query
 import com.google.firebase.Timestamp
 import kotlinx.coroutines.launch
 
-// Definição de cor local para substituir a importação
 val BlueCheck = Color(0xFF34B7F1)
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalGlideComposeApi::class)
@@ -62,26 +61,22 @@ fun ChatScreen(navController: NavController, name: String, receiverUid: String, 
         val conversationRef = db.collection("users").document(senderUid)
             .collection("conversations").document(receiverUid)
 
-        // Verifica se o documento existe antes de tentar atualizar
         conversationRef.get().addOnSuccessListener { documentSnapshot ->
             if (documentSnapshot.exists()) {
                 conversationRef.update("unreadCount", 0)
             }
         }
 
-        // Verifica se o destinatário está na lista de contactos do utilizador
         db.collection("users").document(senderUid).collection("contacts").document(receiverUid).get()
             .addOnSuccessListener { document ->
                 isContact = document.exists()
             }
 
-        // Verifica o estado de bloqueio em tempo real
         db.collection("users").document(senderUid).collection("blockedUsers").document(receiverUid)
             .addSnapshotListener { snapshot, _ ->
                 isBlocked = snapshot != null && snapshot.exists()
             }
 
-        // Busca os dados do destinatário para mostrar a foto
         db.collection("users").document(receiverUid).get().addOnSuccessListener {
             receiverUser = it.toObject(User::class.java)
         }
@@ -97,11 +92,13 @@ fun ChatScreen(navController: NavController, name: String, receiverUid: String, 
                     messageList = newMessages
 
                     val batch = db.batch()
-                    newMessages.filter { it.senderId != senderUid && it.status != "READ" }.forEach {
-                        val messageRefSender = db.collection("chats").document(senderRoom).collection("messages").document(it.id)
-                        val messageRefReceiver = db.collection("chats").document(receiverRoom).collection("messages").document(it.id)
-                        batch.update(messageRefSender, "status", "READ")
-                        batch.update(messageRefReceiver, "status", "READ")
+                    newMessages.forEach { message ->
+                        if (message.senderId != senderUid && message.status != "READ") {
+                            val messageRefSender = db.collection("chats").document(senderRoom).collection("messages").document(message.id)
+                            val messageRefReceiver = db.collection("chats").document(receiverRoom).collection("messages").document(message.id)
+                            batch.update(messageRefSender, "status", "READ")
+                            batch.update(messageRefReceiver, "status", "READ")
+                        }
                     }
                     batch.commit()
                 }
@@ -429,8 +426,13 @@ fun ReceivedMessageBubble(message: Message) {
 
 @Composable
 fun MessageStatusIcon(status: String) {
-    val icon = if (status == "READ") Icons.Default.DoneAll else Icons.Default.Done
-    val color = if (status == "READ") BlueCheck else Color.Gray
+    // Lógica para mostrar o ícone correto com base no status da mensagem
+    val (icon, color) = when (status) {
+        "READ" -> Icons.Default.DoneAll to BlueCheck
+        "DELIVERED" -> Icons.Default.DoneAll to Color.Gray
+        else -> Icons.Default.Done to Color.Gray // "SENT" ou qualquer outro caso
+    }
+
     Icon(
         imageVector = icon,
         contentDescription = "Status da Mensagem",
