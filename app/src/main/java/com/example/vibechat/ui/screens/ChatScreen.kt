@@ -29,13 +29,17 @@ import com.example.vibechat.data.Conversation
 import com.example.vibechat.data.Message
 import com.example.vibechat.data.User
 import com.example.vibechat.repository.UserRepository
-import com.example.vibechat.ui.theme.*
+// import com.example.vibechat.ui.theme.* // Dependências de tema local não podem ser resolvidas aqui
 import com.example.vibechat.utils.formatTimestamp
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
 import com.google.firebase.Timestamp
 import kotlinx.coroutines.launch
+
+// Definição de cor local para substituir a importação
+val BlueCheck = Color(0xFF34B7F1)
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalGlideComposeApi::class)
 @Composable
@@ -323,25 +327,38 @@ private fun updateConversation(db: FirebaseFirestore, senderUid: String, receive
                 return@addOnSuccessListener
             }
 
+            // Lógica para a conversa do REMETENTE (quem envia)
             val senderConversation = Conversation(
                 partnerId = receiverUid,
                 partnerName = receiverCustomName,
                 partnerProfilePictureUrl = receiverUser.profilePictureUrl,
                 lastMessage = lastMessage,
                 timestamp = Timestamp.now(),
-                partnerPhoneNumber = receiverUser.phoneNumber ?: ""
+                partnerPhoneNumber = receiverUser.phoneNumber ?: "",
+                unreadCount = 0
             )
             senderDocRef.collection("conversations").document(receiverUid).set(senderConversation)
 
-            val receiverConversation = Conversation(
-                partnerId = senderUid,
-                partnerName = senderUser.name ?: "Utilizador",
-                partnerProfilePictureUrl = senderUser.profilePictureUrl,
-                lastMessage = lastMessage,
-                timestamp = Timestamp.now(),
-                partnerPhoneNumber = senderUser.phoneNumber ?: ""
+            // ***** INÍCIO DA CORREÇÃO *****
+            // Lógica para a conversa do DESTINATÁRIO (quem recebe) - AGORA NO CLIENTE
+            val receiverConversationRef = receiverDocRef.collection("conversations").document(senderUid)
+
+            val receiverUpdateMap = mapOf(
+                "partnerId" to senderUid,
+                "partnerName" to (senderUser.name ?: "Utilizador"),
+                "partnerProfilePictureUrl" to senderUser.profilePictureUrl,
+                "lastMessage" to lastMessage,
+                "timestamp" to Timestamp.now(),
+                "partnerPhoneNumber" to (senderUser.phoneNumber ?: ""),
+                "unreadCount" to FieldValue.increment(1) // <-- Contagem de volta no app
             )
-            receiverDocRef.collection("conversations").document(senderUid).set(receiverConversation)
+
+            receiverConversationRef.set(receiverUpdateMap, com.google.firebase.firestore.SetOptions.merge())
+                .addOnFailureListener { e ->
+                    Toast.makeText(context, "Falha ao atualizar a conversa do destinatário: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            // ***** FIM DA CORREÇÃO *****
+
         }.addOnFailureListener { e ->
             Toast.makeText(context, "Falha ao buscar o seu perfil: ${e.message}", Toast.LENGTH_LONG).show()
         }

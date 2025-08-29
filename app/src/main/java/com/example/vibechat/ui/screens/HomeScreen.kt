@@ -219,7 +219,7 @@ fun ConversationItem(conversation: Conversation, onClick: () -> Unit) {
                     modifier = Modifier
                         .size(24.dp)
                         .clip(CircleShape)
-                        .background(Color(0xFF25D366)), // Verde do WhatsApp
+                        .background(Color(0xFF25D366)),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
