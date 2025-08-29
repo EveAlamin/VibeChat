@@ -6,7 +6,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -57,11 +59,7 @@ fun ChatScreen(navController: NavController, name: String, receiverUid: String, 
     val senderRoom = senderUid + receiverUid
     val receiverRoom = receiverUid + senderUid
 
-    // ***** INÍCIO DA CORREÇÃO *****
-    // Trocamos LaunchedEffect por DisposableEffect para poder "limpar" o listener
-    // quando o ecrã não estiver mais visível.
     DisposableEffect(senderRoom) {
-        // Zera a contagem de não lidas ao entrar na conversa
         val conversationRef = db.collection("users").document(senderUid)
             .collection("conversations").document(receiverUid)
         conversationRef.get().addOnSuccessListener { documentSnapshot ->
@@ -70,7 +68,6 @@ fun ChatScreen(navController: NavController, name: String, receiverUid: String, 
             }
         }
 
-        // Busca informações do contato, status de bloqueio, etc. (código anterior mantido)
         db.collection("users").document(senderUid).collection("contacts").document(receiverUid).get()
             .addOnSuccessListener { document -> isContact = document.exists() }
         db.collection("users").document(senderUid).collection("blockedUsers").document(receiverUid)
@@ -79,7 +76,6 @@ fun ChatScreen(navController: NavController, name: String, receiverUid: String, 
             receiverUser = it.toObject(User::class.java)
         }
 
-        // Listener para as mensagens
         val listener = db.collection("chats").document(senderRoom).collection("messages")
             .orderBy("timestamp", Query.Direction.ASCENDING)
             .addSnapshotListener { snapshot, e ->
@@ -101,13 +97,10 @@ fun ChatScreen(navController: NavController, name: String, receiverUid: String, 
                 }
             }
 
-        // O bloco onDispose é a chave: ele será executado quando o ecrã for fechado.
         onDispose {
-            listener.remove() // Remove o listener, impedindo que ele marque mensagens como lidas em segundo plano.
+            listener.remove()
         }
     }
-    // ***** FIM DA CORREÇÃO *****
-
 
     Scaffold(
         topBar = {
@@ -186,8 +179,13 @@ fun ChatScreen(navController: NavController, name: String, receiverUid: String, 
                     )
                 }
 
-                LazyColumn(modifier = Modifier.weight(1f).padding(horizontal = 8.dp)) {
-                    items(messageList) { message ->
+                // ***** INÍCIO DA CORREÇÃO *****
+                LazyColumn(
+                    modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                    reverseLayout = true // Começa a renderizar de baixo para cima
+                ) {
+                    items(messageList.reversed()) { message -> // Inverte a lista para mostrar a mais recente em baixo
+                        // ***** FIM DA CORREÇÃO *****
                         if (message.senderId == senderUid) {
                             SentMessageBubble(message = message)
                         } else {
