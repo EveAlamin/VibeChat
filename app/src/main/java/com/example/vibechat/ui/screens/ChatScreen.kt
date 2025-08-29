@@ -57,38 +57,35 @@ fun ChatScreen(navController: NavController, name: String, receiverUid: String, 
     val senderRoom = senderUid + receiverUid
     val receiverRoom = receiverUid + senderUid
 
-    LaunchedEffect(Unit) {
+    // ***** INÍCIO DA CORREÇÃO *****
+    // Trocamos LaunchedEffect por DisposableEffect para poder "limpar" o listener
+    // quando o ecrã não estiver mais visível.
+    DisposableEffect(senderRoom) {
+        // Zera a contagem de não lidas ao entrar na conversa
         val conversationRef = db.collection("users").document(senderUid)
             .collection("conversations").document(receiverUid)
-
         conversationRef.get().addOnSuccessListener { documentSnapshot ->
             if (documentSnapshot.exists()) {
                 conversationRef.update("unreadCount", 0)
             }
         }
 
+        // Busca informações do contato, status de bloqueio, etc. (código anterior mantido)
         db.collection("users").document(senderUid).collection("contacts").document(receiverUid).get()
-            .addOnSuccessListener { document ->
-                isContact = document.exists()
-            }
-
+            .addOnSuccessListener { document -> isContact = document.exists() }
         db.collection("users").document(senderUid).collection("blockedUsers").document(receiverUid)
-            .addSnapshotListener { snapshot, _ ->
-                isBlocked = snapshot != null && snapshot.exists()
-            }
-
+            .addSnapshotListener { snapshot, _ -> isBlocked = snapshot != null && snapshot.exists() }
         db.collection("users").document(receiverUid).get().addOnSuccessListener {
             receiverUser = it.toObject(User::class.java)
         }
 
-        db.collection("chats").document(senderRoom).collection("messages")
+        // Listener para as mensagens
+        val listener = db.collection("chats").document(senderRoom).collection("messages")
             .orderBy("timestamp", Query.Direction.ASCENDING)
             .addSnapshotListener { snapshot, e ->
                 if (e != null) { return@addSnapshotListener }
                 if (snapshot != null) {
-                    val newMessages = snapshot.documents.mapNotNull { doc ->
-                        doc.toObject(Message::class.java)
-                    }
+                    val newMessages = snapshot.documents.mapNotNull { it.toObject(Message::class.java) }
                     messageList = newMessages
 
                     val batch = db.batch()
@@ -103,7 +100,13 @@ fun ChatScreen(navController: NavController, name: String, receiverUid: String, 
                     batch.commit()
                 }
             }
+
+        // O bloco onDispose é a chave: ele será executado quando o ecrã for fechado.
+        onDispose {
+            listener.remove() // Remove o listener, impedindo que ele marque mensagens como lidas em segundo plano.
+        }
     }
+    // ***** FIM DA CORREÇÃO *****
 
 
     Scaffold(
@@ -336,7 +339,6 @@ private fun updateConversation(db: FirebaseFirestore, senderUid: String, receive
             )
             senderDocRef.collection("conversations").document(receiverUid).set(senderConversation)
 
-            // ***** INÍCIO DA CORREÇÃO *****
             // Lógica para a conversa do DESTINATÁRIO (quem recebe) - AGORA NO CLIENTE
             val receiverConversationRef = receiverDocRef.collection("conversations").document(senderUid)
 
@@ -354,7 +356,6 @@ private fun updateConversation(db: FirebaseFirestore, senderUid: String, receive
                 .addOnFailureListener { e ->
                     Toast.makeText(context, "Falha ao atualizar a conversa do destinatário: ${e.message}", Toast.LENGTH_LONG).show()
                 }
-            // ***** FIM DA CORREÇÃO *****
 
         }.addOnFailureListener { e ->
             Toast.makeText(context, "Falha ao buscar o seu perfil: ${e.message}", Toast.LENGTH_LONG).show()
