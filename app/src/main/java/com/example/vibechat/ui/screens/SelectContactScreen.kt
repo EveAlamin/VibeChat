@@ -23,7 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.bumptech.glide.integration.compose.ExperimentalGlideComposeApi
 import com.bumptech.glide.integration.compose.GlideImage
-import com.example.vibechat.data.Contact
+import com.example.vibechat.data.User
 import com.example.vibechat.repository.UserRepository
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
@@ -32,28 +32,46 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalGlideComposeApi::class)
 @Composable
 fun SelectContactScreen(navController: NavController) {
-    var contactList by remember { mutableStateOf<List<Contact>>(emptyList()) }
+    var contactList by remember { mutableStateOf<List<User>>(emptyList()) }
     val auth = FirebaseAuth.getInstance()
-    val db = FirebaseFirestore.getInstance()
     val userRepository = remember { UserRepository() }
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
 
     var showDeleteDialog by remember { mutableStateOf(false) }
-    var contactToDelete by remember { mutableStateOf<Contact?>(null) }
+    var contactToDelete by remember { mutableStateOf<User?>(null) }
 
-    LaunchedEffect(Unit) {
-        val currentUserUid = auth.currentUser?.uid
-        if (currentUserUid != null) {
-            db.collection("users").document(currentUserUid).collection("contacts")
-                .addSnapshotListener { snapshot, e ->
-                    if (e != null) { return@addSnapshotListener }
-                    if (snapshot != null) {
-                        contactList = snapshot.documents.mapNotNull { it.toObject(Contact::class.java) }
+    DisposableEffect(auth.currentUser?.uid) {
+        val currentUser = auth.currentUser
+        if (currentUser == null) return@DisposableEffect onDispose {}
+
+        val db = FirebaseFirestore.getInstance()
+        val contactsRef = db.collection("users").document(currentUser.uid).collection("contacts")
+
+        val listener = contactsRef.addSnapshotListener { contactsSnapshot, error ->
+            if (error != null) { return@addSnapshotListener }
+            if (contactsSnapshot == null) return@addSnapshotListener
+
+            val contactIds = contactsSnapshot.documents.map { it.id }
+
+            if (contactIds.isNotEmpty()) {
+                db.collection("users").whereIn("uid", contactIds)
+                    .addSnapshotListener { usersSnapshot, usersError ->
+                        if (usersError != null) return@addSnapshotListener
+                        if (usersSnapshot != null) {
+                            contactList = usersSnapshot.toObjects(User::class.java)
+                        }
                     }
-                }
+            } else {
+                contactList = emptyList()
+            }
+        }
+
+        onDispose {
+            listener.remove()
         }
     }
+
 
     Scaffold(
         topBar = {
@@ -68,19 +86,21 @@ fun SelectContactScreen(navController: NavController) {
         }
     ) { padding ->
         LazyColumn(modifier = Modifier.padding(padding)) {
-            // Opções do cabeçalho
             item {
                 HeaderOption(icon = Icons.Filled.GroupAdd, text = "Novo grupo", onClick = { /* TODO */ })
                 HeaderOption(icon = Icons.Filled.PersonAdd, text = "Novo contacto", onClick = { navController.navigate("addContact") })
             }
 
-            // Lista de contactos
             items(contactList) { contact ->
                 ContactItem(
                     contact = contact,
                     onClick = {
-                        navController.navigate("chat/${contact.customName}/${contact.uid}?phone=${contact.phoneNumber}") {
-                            popUpTo("home")
+                        if (contact.uid != null && contact.name != null) {
+                            navController.navigate("chat/${contact.name}/${contact.uid}?phone=${contact.phoneNumber ?: ""}") {
+                                popUpTo("home")
+                            }
+                        } else {
+                            Toast.makeText(context, "Dados do contacto incompletos.", Toast.LENGTH_SHORT).show()
                         }
                     },
                     onDeleteClick = {
@@ -95,20 +115,30 @@ fun SelectContactScreen(navController: NavController) {
             AlertDialog(
                 onDismissRequest = { showDeleteDialog = false },
                 title = { Text("Apagar Contacto") },
-                text = { Text("Tem a certeza de que quer apagar ${contactToDelete?.customName} da sua lista de contactos?") },
+                text = { Text("Tem a certeza de que quer apagar ${contactToDelete?.name} da sua lista de contactos?") },
                 confirmButton = {
                     Button(
                         onClick = {
-                            coroutineScope.launch {
-                                val result = userRepository.deleteContact(contactToDelete!!.uid)
-                                result.onSuccess {
-                                    Toast.makeText(context, "Contacto apagado.", Toast.LENGTH_SHORT).show()
+                            contactToDelete?.let { contact ->
+                                // --- CORREÇÃO APLICADA AQUI ---
+                                // Verifica se o UID do contato não é nulo antes de tentar apagar
+                                if (contact.uid != null) {
+                                    coroutineScope.launch {
+                                        val result = userRepository.deleteContact(contact.uid)
+                                        result.onSuccess {
+                                            Toast.makeText(context, "Contacto apagado.", Toast.LENGTH_SHORT).show()
+                                        }
+                                        result.onFailure {
+                                            Toast.makeText(context, "Erro ao apagar: ${it.message}", Toast.LENGTH_LONG).show()
+                                        }
+                                        showDeleteDialog = false
+                                        contactToDelete = null
+                                    }
+                                } else {
+                                    Toast.makeText(context, "Erro: ID do contacto inválido.", Toast.LENGTH_SHORT).show()
+                                    showDeleteDialog = false
+                                    contactToDelete = null
                                 }
-                                result.onFailure {
-                                    Toast.makeText(context, "Erro ao apagar: ${it.message}", Toast.LENGTH_LONG).show()
-                                }
-                                showDeleteDialog = false
-                                contactToDelete = null
                             }
                         }
                     ) {
@@ -143,7 +173,7 @@ fun HeaderOption(icon: ImageVector, text: String, onClick: () -> Unit) {
 @OptIn(ExperimentalGlideComposeApi::class)
 @Composable
 fun ContactItem(
-    contact: Contact,
+    contact: User,
     onClick: () -> Unit,
     onDeleteClick: () -> Unit
 ) {
@@ -161,10 +191,10 @@ fun ContactItem(
                 .background(MaterialTheme.colorScheme.secondaryContainer),
             contentAlignment = Alignment.Center
         ) {
-            if (contact.profilePictureUrl != null) {
+            if (contact.profilePictureUrl != null && contact.profilePictureUrl!!.isNotEmpty()) {
                 GlideImage(
                     model = contact.profilePictureUrl,
-                    contentDescription = "Foto de Perfil de ${contact.customName}",
+                    contentDescription = "Foto de Perfil de ${contact.name}",
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop
                 )
@@ -178,7 +208,7 @@ fun ContactItem(
             }
         }
         Spacer(modifier = Modifier.width(16.dp))
-        Text(text = contact.customName, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+        Text(text = contact.name ?: "Utilizador", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
 
         IconButton(onClick = onDeleteClick) {
             Icon(Icons.Filled.Delete, contentDescription = "Apagar Contacto", tint = Color.Gray)
@@ -186,3 +216,4 @@ fun ContactItem(
     }
     Divider(modifier = Modifier.padding(start = 82.dp))
 }
+
