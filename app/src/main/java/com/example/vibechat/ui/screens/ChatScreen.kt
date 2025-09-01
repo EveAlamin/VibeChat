@@ -46,6 +46,8 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.launch
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.foundation.layout.widthIn
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -650,14 +652,19 @@ private fun updateLastMessage(db: FirebaseFirestore, chatId: String, lastMessage
     }
 }
 
+// Substitua a sua função ReceivedMessageBubble por esta
 @Composable
 fun ReceivedMessageBubble(message: Message, senderName: String?, searchQuery: String) {
+    val configuration = LocalConfiguration.current
+    val screenWidth = configuration.screenWidthDp.dp
+
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
         horizontalArrangement = Arrangement.Start
     ) {
         Box(
             modifier = Modifier
+                .widthIn(max = screenWidth * 0.8f) // <--- LIMITE DE LARGURA ADICIONADO
                 .clip(RoundedCornerShape(
                     topStart = 12.dp,
                     topEnd = 12.dp,
@@ -677,7 +684,61 @@ fun ReceivedMessageBubble(message: Message, senderName: String?, searchQuery: St
                         modifier = Modifier.padding(bottom = 4.dp)
                     )
                 }
+
                 Row(verticalAlignment = Alignment.Bottom) {
+                    // O texto agora tem um peso para não empurrar a hora para fora
+                    Box(modifier = Modifier.weight(1f, fill = false)) {
+                        if (message.wasDeleted) {
+                            Text(
+                                text = message.message ?: "",
+                                fontStyle = FontStyle.Italic,
+                                color = Color.Gray
+                            )
+                        } else {
+                            HighlightText(
+                                text = message.message ?: "",
+                                query = searchQuery,
+                                color = Color.Yellow
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = formatTimestamp(message.timestamp),
+                        fontSize = 10.sp,
+                        color = Color.Gray
+                    )
+                }
+            }
+        }
+    }
+}
+
+// Substitua a sua função SentMessageBubble por esta
+@Composable
+fun SentMessageBubble(message: Message, searchQuery: String) {
+    val configuration = LocalConfiguration.current
+    val screenWidth = configuration.screenWidthDp.dp
+
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.End
+    ) {
+        Box(
+            modifier = Modifier
+                .widthIn(max = screenWidth * 0.8f) // <--- LIMITE DE LARGURA ADICIONADO
+                .clip(RoundedCornerShape(
+                    topStart = 12.dp,
+                    topEnd = 12.dp,
+                    bottomStart = 12.dp,
+                    bottomEnd = 0.dp
+                ))
+                .background(Color(0xFFDCF8C6))
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+        ) {
+            Row(verticalAlignment = Alignment.Bottom) {
+                // O texto agora tem um peso para não empurrar a hora para fora
+                Box(modifier = Modifier.weight(1f, fill = false)) {
                     if (message.wasDeleted) {
                         Text(
                             text = message.message ?: "",
@@ -691,54 +752,10 @@ fun ReceivedMessageBubble(message: Message, senderName: String?, searchQuery: St
                             color = Color.Yellow
                         )
                     }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = formatTimestamp(message.timestamp),
-                        fontSize = 10.sp,
-                        color = Color.Gray,
-                        modifier = Modifier.alignByBaseline()
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun SentMessageBubble(message: Message, searchQuery: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-        horizontalArrangement = Arrangement.End
-    ) {
-        Box(
-            modifier = Modifier
-                .clip(RoundedCornerShape(
-                    topStart = 12.dp,
-                    topEnd = 12.dp,
-                    bottomStart = 12.dp,
-                    bottomEnd = 0.dp
-                ))
-                .background(Color(0xFFDCF8C6))
-                .padding(horizontal = 12.dp, vertical = 8.dp)
-        ) {
-            Row(verticalAlignment = Alignment.Bottom) {
-                if (message.wasDeleted) {
-                    Text(
-                        text = message.message ?: "",
-                        fontStyle = FontStyle.Italic,
-                        color = Color.Gray
-                    )
-                } else {
-                    HighlightText(
-                        text = message.message ?: "",
-                        query = searchQuery,
-                        color = Color.Yellow
-                    )
                 }
                 Spacer(modifier = Modifier.width(8.dp))
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.alignByBaseline()
                 ) {
                     Text(
                         text = formatTimestamp(message.timestamp),
