@@ -322,10 +322,12 @@ fun ChatScreen(
                     FloatingActionButton(
                         onClick = {
                             if (messageText.isNotBlank()) {
+                                // --- CORREÇÃO APLICADA AQUI ---
+                                val currentMessage = messageText
                                 val messageId = db.collection("chats").document().id
                                 val messageObject = Message(
                                     id = messageId,
-                                    message = messageText,
+                                    message = currentMessage,
                                     senderId = senderUid,
                                     timestamp = Timestamp.now()
                                 )
@@ -337,7 +339,7 @@ fun ChatScreen(
                                         db.collection("chats").document(receiverRoomId)
                                             .collection("messages").document(messageId).set(messageObject)
                                     }
-                                    updateLastMessage(db, chatId, messageText, isGroup)
+                                    updateLastMessage(db, chatId, currentMessage, isGroup)
                                 }
                                 messageText = ""
                             }
@@ -606,8 +608,11 @@ private fun updateLastMessage(db: FirebaseFirestore, chatId: String, lastMessage
             memberIds.forEach { memberId ->
                 val conversationRef = db.collection("users").document(memberId)
                     .collection("conversations").document(chatId)
+
+                val messageForMember = if (memberId == senderUid) "Você: $lastMessage" else lastMessage
+
                 val updateMap = mutableMapOf<String, Any>(
-                    "lastMessage" to lastMessage,
+                    "lastMessage" to messageForMember,
                     "timestamp" to timestamp
                 )
                 if (memberId != senderUid) {
@@ -623,7 +628,9 @@ private fun updateLastMessage(db: FirebaseFirestore, chatId: String, lastMessage
             .collection("conversations").document(receiverUid)
         val conversationRefReceiver = db.collection("users").document(receiverUid)
             .collection("conversations").document(senderUid)
-        conversationRefSender.update("lastMessage", lastMessage, "timestamp", timestamp)
+
+        conversationRefSender.update("lastMessage", "Você: $lastMessage", "timestamp", timestamp)
+
         conversationRefReceiver.update(
             "lastMessage", lastMessage,
             "timestamp", timestamp,
