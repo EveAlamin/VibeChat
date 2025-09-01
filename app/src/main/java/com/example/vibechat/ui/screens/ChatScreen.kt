@@ -23,11 +23,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import androidx.navigation.NavController
 import com.bumptech.glide.integration.compose.ExperimentalGlideComposeApi
 import com.bumptech.glide.integration.compose.GlideImage
@@ -42,6 +44,7 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
+import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -66,16 +69,27 @@ fun ChatScreen(
 
     var pinnedMessage by remember { mutableStateOf<Message?>(null) }
 
+    var showDeleteDialog by remember { mutableStateOf(false) }
+    var messageToDelete by remember { mutableStateOf<Message?>(null) }
+
+    var locallyDeletedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+
     val mainCollection = if (isGroup) "groups" else "chats"
     val chatDocumentId = if (isGroup) chatId else getChatRoomId(senderUid, chatId)
     val chatDocRef = db.collection(mainCollection).document(chatDocumentId)
 
-    val filteredMessages by remember(searchQuery, messageList) {
+    val visibleMessages by remember(messageList, locallyDeletedIds) {
+        derivedStateOf {
+            messageList.filter { it.id !in locallyDeletedIds }
+        }
+    }
+
+    val filteredMessages by remember(searchQuery, visibleMessages) {
         derivedStateOf {
             if (searchQuery.isBlank()) {
-                messageList
+                visibleMessages
             } else {
-                messageList.filter {
+                visibleMessages.filter {
                     it.message?.contains(searchQuery, ignoreCase = true) == true
                 }
             }
@@ -86,7 +100,6 @@ fun ChatScreen(
         val conversationRefSender = db.collection("users").document(senderUid).collection("conversations").document(chatId)
 
         if (isGroup) {
-            // Em grupo, atualiza para todos os membros
             db.collection("groups").document(chatId).get().addOnSuccessListener { groupDoc ->
                 val memberIds = groupDoc.toObject(Group::class.java)?.memberIds ?: emptyList()
                 val batch = db.batch()
@@ -97,10 +110,50 @@ fun ChatScreen(
                 batch.commit()
             }
         } else {
-            // Em chat normal, atualiza para ambos
             val conversationRefReceiver = db.collection("users").document(chatId).collection("conversations").document(senderUid)
             conversationRefSender.update("pinnedMessageId", messageId)
             conversationRefReceiver.update("pinnedMessageId", messageId)
+        }
+    }
+
+    fun deleteMessageForEveryone(message: Message) {
+        val updatedData = mapOf(
+            "message" to "🚫 Mensagem apagada",
+            "wasDeleted" to true
+        )
+        chatDocRef.collection("messages").document(message.id).update(updatedData)
+        if (!isGroup) {
+            val receiverRoomId = getChatRoomId(chatId, senderUid)
+            db.collection("chats").document(receiverRoomId)
+                .collection("messages").document(message.id).update(updatedData)
+        }
+        if (messageList.lastOrNull()?.id == message.id) {
+            updateLastMessage(db, chatId, "🚫 Mensagem apagada", isGroup)
+        }
+    }
+
+    fun deleteMessageForMe(messageId: String) {
+        val deletedDocRef = db.collection("users").document(senderUid)
+            .collection("deletedMessages").document(chatDocumentId)
+
+        deletedDocRef.set(mapOf("ids" to FieldValue.arrayUnion(messageId)), SetOptions.merge())
+    }
+
+    LaunchedEffect(isGroup, chatId) {
+        if (isGroup) {
+            db.collection("groups").document(chatId).get().addOnSuccessListener { groupDoc ->
+                val memberIds = groupDoc.toObject(Group::class.java)?.memberIds ?: emptyList()
+                if (memberIds.isNotEmpty()) {
+                    db.collection("users").whereIn("uid", memberIds).get().addOnSuccessListener { usersDoc ->
+                        usersDoc.forEach { userDoc ->
+                            val user = userDoc.toObject(User::class.java)
+                            if (user.uid != null && user.name != null) {
+                                membersNames[user.uid] = user.name
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -110,7 +163,7 @@ fun ChatScreen(
             .addSnapshotListener { snapshot, _ ->
                 val conversation = snapshot?.toObject(Conversation::class.java)
                 val pinnedId = conversation?.pinnedMessageId
-                if (pinnedId != null) {
+                if (pinnedId != null && pinnedId.isNotEmpty()) {
                     chatDocRef.collection("messages").document(pinnedId).get()
                         .addOnSuccessListener { messageDoc ->
                             pinnedMessage = messageDoc.toObject(Message::class.java)
@@ -120,7 +173,13 @@ fun ChatScreen(
                 }
             }
 
-        // ... (resto do DisposableEffect permanece o mesmo)
+        val deletedMessagesListener = db.collection("users").document(senderUid)
+            .collection("deletedMessages").document(chatDocumentId)
+            .addSnapshotListener { snapshot, _ ->
+                val ids = snapshot?.get("ids") as? List<String>
+                locallyDeletedIds = ids?.toSet() ?: emptySet()
+            }
+
         db.collection("users").document(senderUid)
             .collection("conversations").document(chatId)
             .update("unreadCount", 0)
@@ -146,6 +205,7 @@ fun ChatScreen(
             conversationListener.remove()
             detailsListener.remove()
             messagesListener.remove()
+            deletedMessagesListener.remove()
         }
     }
 
@@ -198,7 +258,11 @@ fun ChatScreen(
 
                             Box(modifier = Modifier.combinedClickable(
                                 onClick = {},
-                                onLongClick = { showMessageMenu = true }
+                                onLongClick = {
+                                    if (!message.wasDeleted) {
+                                        showMessageMenu = true
+                                    }
+                                }
                             )) {
                                 messageBubble()
                             }
@@ -214,9 +278,32 @@ fun ChatScreen(
                                         showMessageMenu = false
                                     }
                                 )
+                                DropdownMenuItem(
+                                    text = { Text("Apagar") },
+                                    onClick = {
+                                        messageToDelete = message
+                                        showMessageMenu = false
+                                        showDeleteDialog = true
+                                    }
+                                )
                             }
                         }
                     }
+                }
+
+                if (showDeleteDialog) {
+                    DeleteMessageDialog(
+                        isSender = messageToDelete?.senderId == senderUid,
+                        onDismiss = { showDeleteDialog = false },
+                        onDeleteForMe = {
+                            messageToDelete?.let { deleteMessageForMe(it.id) }
+                            showDeleteDialog = false
+                        },
+                        onDeleteForEveryone = {
+                            messageToDelete?.let { deleteMessageForEveryone(it) }
+                            showDeleteDialog = false
+                        }
+                    )
                 }
 
                 Row(modifier = Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -266,7 +353,55 @@ fun ChatScreen(
     )
 }
 
-// Adicione esta função auxiliar ao final do arquivo
+@Composable
+fun DeleteMessageDialog(
+    isSender: Boolean,
+    onDismiss: () -> Unit,
+    onDeleteForMe: () -> Unit,
+    onDeleteForEveryone: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            shape = RoundedCornerShape(16.dp),
+        ) {
+            Column(
+                modifier = Modifier.padding(vertical = 8.dp)
+            ) {
+                Text(
+                    "Apagar mensagem?",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+
+                TextButton(
+                    onClick = onDeleteForMe,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Apagar para mim")
+                }
+
+                if (isSender) {
+                    TextButton(
+                        onClick = onDeleteForEveryone,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Apagar para todos")
+                    }
+                }
+
+                TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Cancelar", color = Color.Gray)
+                }
+            }
+        }
+    }
+}
+
+
 private fun getChatRoomId(user1: String, user2: String): String {
     return if (user1 < user2) {
         "$user1$user2"
@@ -275,7 +410,6 @@ private fun getChatRoomId(user1: String, user2: String): String {
     }
 }
 
-// O restante do arquivo (PinnedMessageBar, CustomChatTopBar, MessageBubbles, etc.) permanece o mesmo.
 @Composable
 fun PinnedMessageBar(message: Message?, senderName: String, onUnpin: () -> Unit) {
     if (message == null) return
@@ -336,7 +470,7 @@ private fun CustomChatTopBar(
             if (isSearchActive) {
                 IconButton(onClick = {
                     onSearchClick()
-                    onSearchQueryChange("") // Limpa a busca ao fechar
+                    onSearchQueryChange("")
                 }) {
                     Icon(
                         Icons.Default.ArrowBack,
@@ -526,11 +660,19 @@ fun ReceivedMessageBubble(message: Message, senderName: String?, searchQuery: St
                     )
                 }
                 Row(verticalAlignment = Alignment.Bottom) {
-                    HighlightText(
-                        text = message.message ?: "",
-                        query = searchQuery,
-                        color = Color.Yellow
-                    )
+                    if (message.wasDeleted) {
+                        Text(
+                            text = message.message ?: "",
+                            fontStyle = FontStyle.Italic,
+                            color = Color.Gray
+                        )
+                    } else {
+                        HighlightText(
+                            text = message.message ?: "",
+                            query = searchQuery,
+                            color = Color.Yellow
+                        )
+                    }
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = formatTimestamp(message.timestamp),
@@ -562,11 +704,19 @@ fun SentMessageBubble(message: Message, searchQuery: String) {
                 .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
             Row(verticalAlignment = Alignment.Bottom) {
-                HighlightText(
-                    text = message.message ?: "",
-                    query = searchQuery,
-                    color = Color.Yellow
-                )
+                if (message.wasDeleted) {
+                    Text(
+                        text = message.message ?: "",
+                        fontStyle = FontStyle.Italic,
+                        color = Color.Gray
+                    )
+                } else {
+                    HighlightText(
+                        text = message.message ?: "",
+                        query = searchQuery,
+                        color = Color.Yellow
+                    )
+                }
                 Spacer(modifier = Modifier.width(8.dp))
                 Row(
                     verticalAlignment = Alignment.CenterVertically,

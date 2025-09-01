@@ -8,5 +8,6 @@ data class Message(
     val message: String? = null,
     val senderId: String? = null,
     val timestamp: Timestamp? = null,
-    val status: String = "SENT"
+    val status: String = "SENT",
+    val wasDeleted: Boolean = false
 )
