@@ -16,11 +16,13 @@ class PhoneAuthViewModel : ViewModel() {
     private val _uiState = MutableStateFlow<PhoneAuthUiState>(PhoneAuthUiState.Idle)
     val uiState = _uiState.asStateFlow()
 
-    fun startPhoneNumberVerification(activity: Activity, phoneNumber: String, navController: NavController) {
+    // 👇 REMOVIDO o parâmetro navController daqui
+    fun startPhoneNumberVerification(activity: Activity, phoneNumber: String) {
         _uiState.value = PhoneAuthUiState.Loading
 
         val callbacks = object : PhoneAuthProvider.OnVerificationStateChangedCallbacks() {
             override fun onVerificationCompleted(credential: PhoneAuthCredential) {
+                // Lógica para login automático se desejar
                 _uiState.value = PhoneAuthUiState.Idle
             }
 
@@ -29,10 +31,12 @@ class PhoneAuthViewModel : ViewModel() {
             }
 
             override fun onCodeSent(verificationId: String, token: PhoneAuthProvider.ForceResendingToken) {
-                _uiState.value = PhoneAuthUiState.Idle
-                navController.navigate("otpVerification/$verificationId/$phoneNumber")
+                // 👇 AQUI ESTÁ A MUDANÇA PRINCIPAL
+                // Em vez de navegar, atualize o estado com os dados necessários
+                _uiState.value = PhoneAuthUiState.CodeSent(verificationId, phoneNumber)
             }
         }
+        // A 'activity' ainda é necessária aqui por causa do SDK do Firebase
         authRepository.verifyPhoneNumber(activity, phoneNumber, callbacks)
     }
 
@@ -41,8 +45,10 @@ class PhoneAuthViewModel : ViewModel() {
     }
 }
 
+
 sealed class PhoneAuthUiState {
     object Idle : PhoneAuthUiState()
     object Loading : PhoneAuthUiState()
     data class Error(val message: String) : PhoneAuthUiState()
+    data class CodeSent(val verificationId: String, val phoneNumber: String) : PhoneAuthUiState()
 }

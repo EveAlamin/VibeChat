@@ -2,9 +2,7 @@ package com.example.vibechat.ui.screens
 
 import android.app.Activity
 import android.widget.Toast
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.MoreVert
@@ -14,7 +12,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -23,18 +20,22 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import com.example.vibechat.viewmodel.PhoneAuthUiState
 import com.example.vibechat.viewmodel.PhoneAuthViewModel
+import com.example.vibechat.viewmodel.PhoneAuthUiState.CodeSent
+import com.example.vibechat.viewmodel.PhoneAuthUiState.Error
+import androidx.compose.foundation.text.KeyboardOptions
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EnterPhoneNumberScreen(
-    activity: Activity,
     navController: NavController,
     phoneAuthViewModel: PhoneAuthViewModel = viewModel()
 ) {
     val context = LocalContext.current
+    // Pegamos a activity a partir do contexto, é mais seguro
+    val activity = context as Activity
     val uiState by phoneAuthViewModel.uiState.collectAsState()
 
-    // Lista de países (pode expandir depois ou carregar de um JSON)
+    // Lista de países
     val countries = listOf(
         "Brasil" to "+55",
         "Portugal" to "+351",
@@ -47,11 +48,20 @@ fun EnterPhoneNumberScreen(
     var countryCode by remember { mutableStateOf(countries[0].second) }
     var phoneNumber by remember { mutableStateOf("") }
 
+    // Este LaunchedEffect agora gerencia os efeitos colaterais (Toast e Navegação)
     LaunchedEffect(uiState) {
-        if (uiState is PhoneAuthUiState.Error) {
-            val errorMessage = (uiState as PhoneAuthUiState.Error).message
-            Toast.makeText(context, errorMessage, Toast.LENGTH_LONG).show()
-            phoneAuthViewModel.resetState()
+        when (val state = uiState) {
+            is CodeSent -> {
+                // Navega quando o estado for CodeSent
+                navController.navigate("otpVerification/${state.verificationId}/${state.phoneNumber}")
+                phoneAuthViewModel.resetState() // Limpa o estado para não navegar de novo
+            }
+            is Error -> {
+                // Mostra o erro e depois limpa o estado
+                Toast.makeText(context, state.message, Toast.LENGTH_LONG).show()
+                phoneAuthViewModel.resetState()
+            }
+            else -> { /* Não faz nada para Idle ou Loading */ }
         }
     }
 
@@ -174,14 +184,14 @@ fun EnterPhoneNumberScreen(
                 )
             }
 
-
             Spacer(modifier = Modifier.weight(1f))
 
             Button(
                 onClick = {
                     val fullNumber = countryCode + phoneNumber
                     if (fullNumber.length > 5) {
-                        phoneAuthViewModel.startPhoneNumberVerification(activity, fullNumber, navController)
+                        // Chamada atualizada para o ViewModel, sem passar o NavController
+                        phoneAuthViewModel.startPhoneNumberVerification(activity, fullNumber)
                     } else {
                         Toast.makeText(context, "Por favor, insira um número válido.", Toast.LENGTH_SHORT).show()
                     }

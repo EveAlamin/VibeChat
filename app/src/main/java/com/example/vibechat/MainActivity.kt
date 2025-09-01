@@ -62,7 +62,7 @@ class MainActivity : ComponentActivity() {
                             PhoneLoginScreen(navController = navController)
                         }
                         composable("enterPhoneNumber") {
-                            EnterPhoneNumberScreen(activity = this@MainActivity, navController = navController)
+                            EnterPhoneNumberScreen(navController = navController)
                         }
                         composable(
                             "otpVerification/{verificationId}/{phoneNumber}",
