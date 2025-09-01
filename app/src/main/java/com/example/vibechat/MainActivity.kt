@@ -101,6 +101,8 @@ class MainActivity : ComponentActivity() {
                             SelectContactScreen(navController = navController)
                         }
 
+
+
                         composable(
                             "groupDetails/{groupId}",
                             arguments = listOf(navArgument("groupId") { type = NavType.StringType })
@@ -111,6 +113,14 @@ class MainActivity : ComponentActivity() {
 
                         composable("createGroup") {
                             CreateGroupScreen(navController = navController)
+                        }
+
+                        composable(
+                            "addGroupMembers/{groupId}",
+                            arguments = listOf(navArgument("groupId") { type = NavType.StringType })
+                        ) { backStackEntry ->
+                            val groupId = backStackEntry.arguments?.getString("groupId") ?: ""
+                            AddGroupMembersScreen(navController = navController, groupId = groupId)
                         }
 
                         composable("profile") {

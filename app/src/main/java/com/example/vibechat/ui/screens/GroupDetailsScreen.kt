@@ -1,5 +1,6 @@
 package com.example.vibechat.ui.screens
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -16,6 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -24,8 +26,10 @@ import com.bumptech.glide.integration.compose.ExperimentalGlideComposeApi
 import com.bumptech.glide.integration.compose.GlideImage
 import com.example.vibechat.data.Group
 import com.example.vibechat.data.User
+import com.example.vibechat.repository.GroupRepository
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalGlideComposeApi::class)
 @Composable
@@ -33,20 +37,37 @@ fun GroupDetailsScreen(navController: NavController, groupId: String) {
     var group by remember { mutableStateOf<Group?>(null) }
     var members by remember { mutableStateOf<List<User>>(emptyList()) }
     val currentUserUid = FirebaseAuth.getInstance().currentUser?.uid
+    val coroutineScope = rememberCoroutineScope()
+    val groupRepository = remember { GroupRepository() }
+    val context = LocalContext.current
 
-    // Efeito para buscar detalhes do grupo e dos membros
-    LaunchedEffect(groupId) {
+    // Estados para o diálogo de renomear
+    var showRenameDialog by remember { mutableStateOf(false) }
+    var newGroupName by remember { mutableStateOf("") }
+
+    // Estados para o diálogo de confirmação de remoção
+    var showRemoveDialog by remember { mutableStateOf(false) }
+    var memberToRemove by remember { mutableStateOf<User?>(null) }
+
+    DisposableEffect(groupId) {
         val db = FirebaseFirestore.getInstance()
-        db.collection("groups").document(groupId).get().addOnSuccessListener { groupSnapshot ->
-            val groupData = groupSnapshot.toObject(Group::class.java)
-            group = groupData
-            if (groupData != null && groupData.memberIds.isNotEmpty()) {
-                db.collection("users").whereIn("uid", groupData.memberIds).get()
-                    .addOnSuccessListener { usersSnapshot ->
-                        members = usersSnapshot.toObjects(User::class.java)
+        val groupListener = db.collection("groups").document(groupId)
+            .addSnapshotListener { groupSnapshot, _ ->
+                val groupData = groupSnapshot?.toObject(Group::class.java)
+                group = groupData
+                if (groupData != null && groupData.memberIds.isNotEmpty()) {
+                    db.collection("users").whereIn("uid", groupData.memberIds)
+                        .addSnapshotListener { usersSnapshot, _ ->
+                            members = usersSnapshot?.toObjects(User::class.java) ?: emptyList()
+                        }
+                } else {
+                    members = emptyList()
+                    if (groupData != null && groupData.memberIds.isEmpty()) {
+                        navController.popBackStack()
                     }
+                }
             }
-        }
+        onDispose { groupListener.remove() }
     }
 
     val isCurrentUserAdmin = group?.adminIds?.contains(currentUserUid) == true
@@ -64,7 +85,6 @@ fun GroupDetailsScreen(navController: NavController, groupId: String) {
         }
     ) { padding ->
         LazyColumn(modifier = Modifier.padding(padding)) {
-            // Seção com imagem e nome do grupo
             item {
                 Column(
                     modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
@@ -77,6 +97,7 @@ fun GroupDetailsScreen(navController: NavController, groupId: String) {
                             .background(MaterialTheme.colorScheme.secondaryContainer),
                         contentAlignment = Alignment.Center
                     ) {
+                        // ... (código da imagem do grupo sem alterações)
                         if (group?.groupPictureUrl != null) {
                             GlideImage(
                                 model = group?.groupPictureUrl,
@@ -94,16 +115,33 @@ fun GroupDetailsScreen(navController: NavController, groupId: String) {
                         }
                     }
                     Spacer(modifier = Modifier.height(16.dp))
-                    Text(
-                        text = group?.name ?: "",
-                        fontSize = 24.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+
+                    // --- ÁREA DO NOME MODIFICADA ---
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center,
+                        modifier = Modifier.padding(horizontal = 16.dp)
+                    ) {
+                        Text(
+                            text = group?.name ?: "",
+                            fontSize = 24.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        // Mostra o ícone de edição apenas para administradores
+                        if (isCurrentUserAdmin) {
+                            IconButton(onClick = {
+                                newGroupName = group?.name ?: ""
+                                showRenameDialog = true
+                            }) {
+                                Icon(Icons.Default.Edit, contentDescription = "Renomear grupo", tint = Color.Gray)
+                            }
+                        }
+                    }
                 }
                 Divider()
             }
 
-            // Seção de participantes
+            // ... (resto do LazyColumn com participantes e ActionItem sem alterações)
             item {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
@@ -111,30 +149,102 @@ fun GroupDetailsScreen(navController: NavController, groupId: String) {
                         style = MaterialTheme.typography.titleMedium
                     )
                     Spacer(modifier = Modifier.height(8.dp))
-                    // Opção para adicionar participantes (visível apenas para admins)
                     if (isCurrentUserAdmin) {
                         ActionItem(
                             icon = Icons.Default.PersonAdd,
                             text = "Adicionar participantes",
-                            onClick = { /* TODO: Navegar para tela de adicionar */ }
+                            onClick = { navController.navigate("addGroupMembers/$groupId") }
                         )
                     }
                 }
             }
-
-            // Lista de participantes
             items(members) { member ->
                 MemberItem(
                     member = member,
                     isAdmin = group?.adminIds?.contains(member.uid) == true,
                     showAdminOptions = isCurrentUserAdmin && member.uid != currentUserUid,
-                    onRemoveClick = { /* TODO: Lógica para remover */ }
+                    onRemoveClick = {
+                        memberToRemove = member
+                        showRemoveDialog = true
+                    }
                 )
             }
         }
     }
+
+    // Diálogo de confirmação para remover membro
+    if (showRemoveDialog) {
+        AlertDialog(
+            onDismissRequest = { showRemoveDialog = false },
+            title = { Text("Remover Participante") },
+            text = { Text("Tem a certeza de que quer remover ${memberToRemove?.name} do grupo?") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        coroutineScope.launch {
+                            val result = groupRepository.removeMemberFromGroup(groupId, memberToRemove!!.uid!!)
+                            if (result.isSuccess) {
+                                Toast.makeText(context, "${memberToRemove?.name} removido.", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(context, "Erro ao remover.", Toast.LENGTH_SHORT).show()
+                            }
+                            showRemoveDialog = false
+                            memberToRemove = null
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Remover")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRemoveDialog = false }) {
+                    Text("Cancelar")
+                }
+            }
+        )
+    }
+
+    // --- NOVO DIÁLOGO PARA RENOMEAR O GRUPO ---
+    if (showRenameDialog) {
+        AlertDialog(
+            onDismissRequest = { showRenameDialog = false },
+            title = { Text("Renomear Grupo") },
+            text = {
+                TextField(
+                    value = newGroupName,
+                    onValueChange = { newGroupName = it },
+                    singleLine = true,
+                    label = { Text("Nome do grupo") }
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        coroutineScope.launch {
+                            val result = groupRepository.renameGroup(groupId, newGroupName)
+                            if (result.isSuccess) {
+                                Toast.makeText(context, "Grupo renomeado.", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(context, "Erro: ${result.exceptionOrNull()?.message}", Toast.LENGTH_LONG).show()
+                            }
+                            showRenameDialog = false
+                        }
+                    }
+                ) {
+                    Text("Guardar")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRenameDialog = false }) {
+                    Text("Cancelar")
+                }
+            }
+        )
+    }
 }
 
+// ... (Composables MemberItem e ActionItem permanecem os mesmos)
 @OptIn(ExperimentalGlideComposeApi::class)
 @Composable
 fun MemberItem(
@@ -150,9 +260,7 @@ fun MemberItem(
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // --- CORREÇÃO APLICADA AQUI ---
         if (member.profilePictureUrl.isNullOrEmpty()) {
-            // Se a URL da foto for nula ou vazia, mostramos o ícone padrão
             Icon(
                 imageVector = Icons.Default.Person,
                 contentDescription = "Sem foto",
@@ -163,7 +271,6 @@ fun MemberItem(
                     .padding(8.dp)
             )
         } else {
-            // Se houver uma URL, usamos o GlideImage para carregar a foto
             GlideImage(
                 model = member.profilePictureUrl,
                 contentDescription = "Foto de ${member.name}",
@@ -173,8 +280,6 @@ fun MemberItem(
                 contentScale = ContentScale.Crop
             )
         }
-        // --- FIM DA CORREÇÃO ---
-
         Spacer(modifier = Modifier.width(16.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(member.name ?: "Usuário", style = MaterialTheme.typography.bodyLarge)

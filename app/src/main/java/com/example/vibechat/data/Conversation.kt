@@ -1,6 +1,7 @@
 package com.example.vibechat.data
 
 import com.google.firebase.Timestamp
+import com.google.firebase.database.PropertyName
 
 data class Conversation(
     val partnerId: String = "",
@@ -10,5 +11,6 @@ data class Conversation(
     val timestamp: Timestamp = Timestamp.now(),
     val partnerPhoneNumber: String = "",
     val unreadCount: Int = 0,
-    val isGroup: Boolean = false
+    @get:PropertyName("isGroup") @set:PropertyName("isGroup")
+    var isGroup: Boolean = false
 )

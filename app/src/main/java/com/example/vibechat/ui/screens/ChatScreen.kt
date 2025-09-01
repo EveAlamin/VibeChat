@@ -38,7 +38,7 @@ import com.google.firebase.firestore.Query
 import com.google.firebase.Timestamp
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalGlideComposeApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
     navController: NavController,
@@ -112,7 +112,7 @@ fun ChatScreen(
                 chatPartner = chatPartner,
                 name = name,
                 onBackClick = { navController.popBackStack() },
-                onTitleClick = {
+                onDetailsClick = { // Renomeado de onTitleClick para onDetailsClick
                     if (isGroup) {
                         navController.navigate("groupDetails/$chatId")
                     }
@@ -191,7 +191,7 @@ private fun CustomChatTopBar(
     chatPartner: Any?,
     name: String,
     onBackClick: () -> Unit,
-    onTitleClick: () -> Unit
+    onDetailsClick: () -> Unit // Parâmetro renomeado
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -205,7 +205,6 @@ private fun CustomChatTopBar(
                 .padding(horizontal = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Ícone de Voltar
             IconButton(onClick = onBackClick) {
                 Icon(
                     Icons.Default.ArrowBack,
@@ -214,19 +213,11 @@ private fun CustomChatTopBar(
                 )
             }
 
-            // --- CORREÇÃO APLICADA AQUI ---
-            // A Row clicável agora é o elemento principal que se expande
+            // A área do título agora é apenas para exibição, NÃO é mais clicável
             Row(
                 modifier = Modifier
-                    .weight(1f) // Garante que esta Row ocupe o espaço restante
-                    .fillMaxHeight()
-                    .clickable(
-                        enabled = isGroup, // O clique só é habilitado se for um grupo
-                        onClick = onTitleClick,
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = rememberRipple(color = Color.White.copy(alpha = 0.3f))
-                    )
-                    .padding(horizontal = 8.dp),
+                    .weight(1f)
+                    .padding(horizontal = 12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 val profilePictureUrl = if (isGroup) (chatPartner as? Group)?.groupPictureUrl else (chatPartner as? User)?.profilePictureUrl
@@ -269,15 +260,17 @@ private fun CustomChatTopBar(
                     )
                 }
             }
-            // --- FIM DA CORREÇÃO ---
 
-            // Ícone de Menu (opcional)
-            IconButton(onClick = { /* Implementar menu de opções */ }) {
-                Icon(
-                    Icons.Default.MoreVert,
-                    contentDescription = "Mais opções",
-                    tint = Color.White
-                )
+            // --- CORREÇÃO APLICADA AQUI ---
+            // Se for um grupo, mostramos um botão de "Info" que é clicável
+            if (isGroup) {
+                IconButton(onClick = onDetailsClick) { // Usamos o novo parâmetro aqui
+                    Icon(
+                        Icons.Default.Info, // Ícone mais apropriado
+                        contentDescription = "Detalhes do grupo",
+                        tint = Color.White
+                    )
+                }
             }
         }
     }
