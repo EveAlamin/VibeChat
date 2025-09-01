@@ -1,16 +1,17 @@
 package com.example.vibechat.ui.screens
 
-import android.content.Context
-import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.ripple.rememberRipple
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -18,255 +19,129 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import com.bumptech.glide.integration.compose.ExperimentalGlideComposeApi
 import com.bumptech.glide.integration.compose.GlideImage
-import com.example.vibechat.data.Conversation
+import com.example.vibechat.data.Group
 import com.example.vibechat.data.Message
 import com.example.vibechat.data.User
-import com.example.vibechat.repository.UserRepository
+import com.example.vibechat.ui.theme.BlueCheck
 import com.example.vibechat.utils.formatTimestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
 import com.google.firebase.Timestamp
-import com.google.firebase.database.DataSnapshot
-import com.google.firebase.database.DatabaseError
-import com.google.firebase.database.FirebaseDatabase
-import com.google.firebase.database.ValueEventListener
 import kotlinx.coroutines.launch
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-
-val BlueCheck = Color(0xFF34B7F1)
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalGlideComposeApi::class)
 @Composable
-fun ChatScreen(navController: NavController, name: String, receiverUid: String, receiverPhone: String) {
+fun ChatScreen(
+    navController: NavController,
+    name: String,
+    chatId: String,
+    receiverPhone: String,
+    isGroup: Boolean
+) {
     var messageText by remember { mutableStateOf("") }
     var messageList by remember { mutableStateOf<List<Message>>(emptyList()) }
-    var receiverUser by remember { mutableStateOf<User?>(null) }
-    var isContact by remember { mutableStateOf(true) }
-    var isBlocked by remember { mutableStateOf(false) }
-
-    // NOVO ESTADO PARA O STATUS DE PRESENÇA
-    var userStatus by remember { mutableStateOf("Offline") }
-
+    var chatPartner by remember { mutableStateOf<Any?>(null) }
+    val membersNames = remember { mutableStateMapOf<String, String>() }
     val senderUid = FirebaseAuth.getInstance().currentUser?.uid!!
     val db = FirebaseFirestore.getInstance()
-    val context = LocalContext.current
-    val userRepository = remember { UserRepository() }
     val coroutineScope = rememberCoroutineScope()
+    val listState = rememberLazyListState()
 
-    val senderRoom = senderUid + receiverUid
-    val receiverRoom = receiverUid + senderUid
+    val mainCollection = if (isGroup) "groups" else "chats"
+    val chatDocumentId = if (isGroup) chatId else senderUid + chatId
 
-    // EFEITO PARA OBSERVAR O STATUS DO USUÁRIO NO REALTIME DATABASE
-    DisposableEffect(receiverUid) {
-        val statusRef = FirebaseDatabase.getInstance().getReference("/status/$receiverUid")
-        val listener = object : ValueEventListener {
-            override fun onDataChange(snapshot: DataSnapshot) {
-                if (snapshot.exists()) {
-                    val isOnline = snapshot.child("isOnline").getValue(Boolean::class.java) ?: false
-                    if (isOnline) {
-                        userStatus = "Online"
-                    } else {
-                        val lastSeen = snapshot.child("lastSeen").getValue(Long::class.java) ?: 0
-                        userStatus = "Visto por último: ${formatLastSeen(lastSeen)}"
+    LaunchedEffect(isGroup, chatId) {
+        if (isGroup) {
+            db.collection("groups").document(chatId).get().addOnSuccessListener { groupDoc ->
+                val memberIds = groupDoc.toObject(Group::class.java)?.memberIds ?: emptyList()
+                if (memberIds.isNotEmpty()) {
+                    db.collection("users").whereIn("uid", memberIds).get().addOnSuccessListener { usersDoc ->
+                        usersDoc.forEach { userDoc ->
+                            val user = userDoc.toObject(User::class.java)
+                            if (user.uid != null && user.name != null) {
+                                membersNames[user.uid] = user.name
+                            }
+                        }
                     }
-                } else {
-                    userStatus = "Offline"
                 }
             }
-            override fun onCancelled(error: DatabaseError) {
-                userStatus = "Offline" // Em caso de erro, assume offline
-            }
-        }
-        statusRef.addValueEventListener(listener)
-
-        // Limpa o listener quando o Composable é removido da tela
-        onDispose {
-            statusRef.removeEventListener(listener)
         }
     }
 
-    DisposableEffect(senderRoom) {
-        val conversationRef = db.collection("users").document(senderUid)
-            .collection("conversations").document(receiverUid)
-        conversationRef.get().addOnSuccessListener { documentSnapshot ->
-            if (documentSnapshot.exists()) {
-                conversationRef.update("unreadCount", 0)
+    DisposableEffect(chatId) {
+        db.collection("users").document(senderUid)
+            .collection("conversations").document(chatId)
+            .update("unreadCount", 0)
+
+        val detailsListener = if (isGroup) {
+            db.collection("groups").document(chatId).addSnapshotListener { snapshot, _ ->
+                chatPartner = snapshot?.toObject(Group::class.java)
+            }
+        } else {
+            db.collection("users").document(chatId).addSnapshotListener { snapshot, _ ->
+                chatPartner = snapshot?.toObject(User::class.java)
             }
         }
 
-        db.collection("users").document(senderUid).collection("contacts").document(receiverUid).get()
-            .addOnSuccessListener { document -> isContact = document.exists() }
-        db.collection("users").document(senderUid).collection("blockedUsers").document(receiverUid)
-            .addSnapshotListener { snapshot, _ -> isBlocked = snapshot != null && snapshot.exists() }
-        db.collection("users").document(receiverUid).get().addOnSuccessListener {
-            receiverUser = it.toObject(User::class.java)
-        }
-
-        val listener = db.collection("chats").document(senderRoom).collection("messages")
+        val messagesListener = db.collection(mainCollection).document(chatDocumentId).collection("messages")
             .orderBy("timestamp", Query.Direction.ASCENDING)
             .addSnapshotListener { snapshot, e ->
-                if (e != null) { return@addSnapshotListener }
-                if (snapshot != null) {
-                    val newMessages = snapshot.documents.mapNotNull { it.toObject(Message::class.java) }
-                    messageList = newMessages
-
-                    val batch = db.batch()
-                    newMessages.forEach { message ->
-                        if (message.senderId != senderUid && message.status != "READ") {
-                            val messageRefSender = db.collection("chats").document(senderRoom).collection("messages").document(message.id)
-                            val messageRefReceiver = db.collection("chats").document(receiverRoom).collection("messages").document(message.id)
-                            batch.update(messageRefSender, "status", "READ")
-                            batch.update(messageRefReceiver, "status", "READ")
-                        }
-                    }
-                    batch.commit()
-                }
+                if (e != null || snapshot == null) return@addSnapshotListener
+                messageList = snapshot.documents.mapNotNull { it.toObject(Message::class.java) }
             }
 
         onDispose {
-            listener.remove()
+            detailsListener.remove()
+            messagesListener.remove()
         }
     }
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.secondaryContainer),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            if (receiverUser?.profilePictureUrl != null) {
-                                GlideImage(
-                                    model = receiverUser?.profilePictureUrl,
-                                    contentDescription = "Foto de Perfil de $name",
-                                    modifier = Modifier.fillMaxSize(),
-                                    contentScale = ContentScale.Crop
-                                )
-                            } else {
-                                Icon(
-                                    imageVector = Icons.Default.Person,
-                                    contentDescription = "Sem Foto de Perfil",
-                                    modifier = Modifier.size(24.dp),
-                                    tint = MaterialTheme.colorScheme.onSecondaryContainer
-                                )
-                            }
-                        }
-                        Spacer(modifier = Modifier.width(8.dp))
-
-                        // ALTERAÇÃO PARA EXIBIR NOME E STATUS
-                        Column {
-                            Text(name, color = Color.White)
-                            Text(
-                                text = userStatus,
-                                color = Color.White.copy(alpha = 0.8f),
-                                fontSize = 12.sp
-                            )
-                        }
+            CustomChatTopBar(
+                isGroup = isGroup,
+                chatPartner = chatPartner,
+                name = name,
+                onBackClick = { navController.popBackStack() },
+                onTitleClick = {
+                    if (isGroup) {
+                        navController.navigate("groupDetails/$chatId")
                     }
-                },
-                navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Voltar", tint = Color.White)
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { /* TODO */ }) {
-                        Icon(Icons.Default.Videocam, contentDescription = "Chamada de Vídeo", tint = Color.White)
-                    }
-                    IconButton(onClick = { /* TODO */ }) {
-                        Icon(Icons.Default.Call, contentDescription = "Chamada de Voz", tint = Color.White)
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primary
-                )
+                }
             )
         },
         content = { padding ->
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding)
-                    .background(Color(0xFFECE5DD))
-            ) {
-                if (!isContact && !isBlocked) {
-                    UnknownContactBanner(
-                        onBlock = {
-                            coroutineScope.launch {
-                                val result = userRepository.blockContact(receiverUid)
-                                result.onSuccess {
-                                    Toast.makeText(context, "$name foi bloqueado.", Toast.LENGTH_SHORT).show()
-                                    navController.popBackStack()
-                                }
-                                result.onFailure {
-                                    Toast.makeText(context, "Erro ao bloquear: ${it.message}", Toast.LENGTH_LONG).show()
-                                }
-                            }
-                        },
-                        onAddContact = {
-                            navController.navigate("addContact?phone=$receiverPhone")
-                        }
-                    )
-                }
-
+            Column(modifier = Modifier.fillMaxSize().padding(padding).background(Color(0xFFECE5DD))) {
                 LazyColumn(
                     modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                    state = listState,
                     reverseLayout = true
                 ) {
                     items(messageList.reversed()) { message ->
+                        val senderName = if (isGroup && message.senderId != senderUid) membersNames[message.senderId] else null
                         if (message.senderId == senderUid) {
                             SentMessageBubble(message = message)
                         } else {
-                            ReceivedMessageBubble(message = message)
+                            ReceivedMessageBubble(message = message, senderName = senderName)
                         }
                     }
                 }
 
-                if (isBlocked) {
-                    BlockBanner(
-                        onUnblock = {
-                            coroutineScope.launch {
-                                val result = userRepository.unblockContact(receiverUid)
-                                result.onSuccess {
-                                    Toast.makeText(context, "$name foi desbloqueado.", Toast.LENGTH_SHORT).show()
-                                }
-                                result.onFailure {
-                                    Toast.makeText(context, "Erro ao desbloquear: ${it.message}", Toast.LENGTH_LONG).show()
-                                }
-                            }
-                        }
-                    )
-                }
-
-                Row(
-                    modifier = Modifier.padding(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+                Row(modifier = Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     TextField(
                         value = messageText,
                         onValueChange = { messageText = it },
                         modifier = Modifier.weight(1f),
-                        placeholder = {
-                            if(isBlocked) Text("Você não pode enviar mensagens para este contacto.")
-                            else Text("Digite uma mensagem...")
-                        },
-                        enabled = !isBlocked,
+                        placeholder = { Text("Digite uma mensagem...") },
                         shape = RoundedCornerShape(24.dp),
                         colors = TextFieldDefaults.textFieldColors(
                             focusedIndicatorColor = Color.Transparent,
@@ -276,15 +151,25 @@ fun ChatScreen(navController: NavController, name: String, receiverUid: String, 
                     Spacer(modifier = Modifier.width(8.dp))
                     FloatingActionButton(
                         onClick = {
-                            if (!isBlocked && messageText.isNotBlank()) {
+                            if (messageText.isNotBlank()) {
                                 val messageId = db.collection("chats").document().id
-                                val messageObject = Message(id = messageId, message = messageText, senderId = senderUid, timestamp = Timestamp.now(), status = "SENT")
+                                val messageObject = Message(
+                                    id = messageId,
+                                    message = messageText,
+                                    senderId = senderUid,
+                                    timestamp = Timestamp.now()
+                                )
 
-                                db.collection("chats").document(senderRoom).collection("messages").document(messageId).set(messageObject)
-                                db.collection("chats").document(receiverRoom).collection("messages").document(messageId).set(messageObject)
-
-                                updateConversation(db, senderUid, receiverUid, name, messageText, context)
-
+                                coroutineScope.launch {
+                                    db.collection(mainCollection).document(chatDocumentId)
+                                        .collection("messages").document(messageId).set(messageObject)
+                                    if (!isGroup) {
+                                        val receiverRoom = chatId + senderUid
+                                        db.collection("chats").document(receiverRoom)
+                                            .collection("messages").document(messageId).set(messageObject)
+                                    }
+                                    updateLastMessage(db, chatId, messageText, isGroup)
+                                }
                                 messageText = ""
                             }
                         },
@@ -299,109 +184,186 @@ fun ChatScreen(navController: NavController, name: String, receiverUid: String, 
     )
 }
 
+@OptIn(ExperimentalGlideComposeApi::class)
 @Composable
-fun BlockBanner(onUnblock: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(Color(0xFFFFF9C4))
-            .clickable(onClick = onUnblock)
-            .padding(16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.Center
+private fun CustomChatTopBar(
+    isGroup: Boolean,
+    chatPartner: Any?,
+    name: String,
+    onBackClick: () -> Unit,
+    onTitleClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.primary,
+        shadowElevation = 4.dp
     ) {
-        Text(
-            text = "Você bloqueou este contacto. Toque para desbloquear.",
-            fontSize = 14.sp,
-            textAlign = TextAlign.Center,
-            color = Color.Black
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(64.dp)
+                .padding(horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Ícone de Voltar
+            IconButton(onClick = onBackClick) {
+                Icon(
+                    Icons.Default.ArrowBack,
+                    contentDescription = "Voltar",
+                    tint = Color.White
+                )
+            }
+
+            // --- CORREÇÃO APLICADA AQUI ---
+            // A Row clicável agora é o elemento principal que se expande
+            Row(
+                modifier = Modifier
+                    .weight(1f) // Garante que esta Row ocupe o espaço restante
+                    .fillMaxHeight()
+                    .clickable(
+                        enabled = isGroup, // O clique só é habilitado se for um grupo
+                        onClick = onTitleClick,
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = rememberRipple(color = Color.White.copy(alpha = 0.3f))
+                    )
+                    .padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val profilePictureUrl = if (isGroup) (chatPartner as? Group)?.groupPictureUrl else (chatPartner as? User)?.profilePictureUrl
+                val defaultIcon = if (isGroup) Icons.Default.Groups else Icons.Default.Person
+
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.secondaryContainer),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (profilePictureUrl != null) {
+                        GlideImage(
+                            model = profilePictureUrl,
+                            contentDescription = "Foto de $name",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                    } else {
+                        Icon(
+                            imageVector = defaultIcon,
+                            contentDescription = "Sem Foto",
+                            modifier = Modifier.size(24.dp),
+                            tint = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(12.dp))
+
+                Column(modifier = Modifier.weight(1f, fill = false)) {
+                    Text(
+                        text = name,
+                        color = Color.White,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+            // --- FIM DA CORREÇÃO ---
+
+            // Ícone de Menu (opcional)
+            IconButton(onClick = { /* Implementar menu de opções */ }) {
+                Icon(
+                    Icons.Default.MoreVert,
+                    contentDescription = "Mais opções",
+                    tint = Color.White
+                )
+            }
+        }
+    }
+}
+
+
+// Funções e Composables auxiliares (sem alteração)
+private fun updateLastMessage(db: FirebaseFirestore, chatId: String, lastMessage: String, isGroup: Boolean) {
+    val timestamp = Timestamp.now()
+    val senderUid = FirebaseAuth.getInstance().currentUser?.uid ?: return
+
+    if (isGroup) {
+        db.collection("groups").document(chatId).get().addOnSuccessListener { groupDoc ->
+            val memberIds = groupDoc.toObject(Group::class.java)?.memberIds ?: return@addOnSuccessListener
+            val batch = db.batch()
+            memberIds.forEach { memberId ->
+                val conversationRef = db.collection("users").document(memberId)
+                    .collection("conversations").document(chatId)
+                val updateMap = mutableMapOf<String, Any>(
+                    "lastMessage" to lastMessage,
+                    "timestamp" to timestamp
+                )
+                if (memberId != senderUid) {
+                    updateMap["unreadCount"] = FieldValue.increment(1)
+                }
+                batch.update(conversationRef, updateMap)
+            }
+            batch.commit()
+        }
+    } else {
+        val receiverUid = chatId
+        val conversationRefSender = db.collection("users").document(senderUid)
+            .collection("conversations").document(receiverUid)
+        val conversationRefReceiver = db.collection("users").document(receiverUid)
+            .collection("conversations").document(senderUid)
+        conversationRefSender.update("lastMessage", lastMessage, "timestamp", timestamp)
+        conversationRefReceiver.update(
+            "lastMessage", lastMessage,
+            "timestamp", timestamp,
+            "unreadCount", FieldValue.increment(1)
         )
     }
 }
 
 @Composable
-fun UnknownContactBanner(onBlock: () -> Unit, onAddContact: () -> Unit) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(8.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+fun ReceivedMessageBubble(message: Message, senderName: String?) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.Start
     ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(
+                    topStart = 12.dp,
+                    topEnd = 12.dp,
+                    bottomStart = 0.dp,
+                    bottomEnd = 12.dp
+                ))
+                .background(Color.White)
+                .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
-            Text(
-                text = "Este número não está na sua lista de contactos.",
-                textAlign = TextAlign.Center
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Row {
-                Button(onClick = onBlock, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) {
-                    Text("Bloquear")
+            Column {
+                if (senderName != null) {
+                    Text(
+                        text = senderName,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(bottom = 4.dp)
+                    )
                 }
-                Spacer(modifier = Modifier.width(16.dp))
-                Button(onClick = onAddContact) {
-                    Text("Adicionar")
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(
+                        text = message.message ?: "",
+                        modifier = Modifier.padding(end = 8.dp).alignByBaseline(),
+                        color = Color.Black
+                    )
+                    Text(
+                        text = formatTimestamp(message.timestamp),
+                        fontSize = 10.sp,
+                        color = Color.Gray,
+                        modifier = Modifier.alignByBaseline()
+                    )
                 }
             }
         }
-    }
-}
-
-private fun updateConversation(db: FirebaseFirestore, senderUid: String, receiverUid: String, receiverCustomName: String, lastMessage: String, context: Context) {
-    val senderDocRef = db.collection("users").document(senderUid)
-    val receiverDocRef = db.collection("users").document(receiverUid)
-
-    receiverDocRef.get().addOnSuccessListener { receiverDoc ->
-        val receiverUser = receiverDoc.toObject(User::class.java)
-        if (receiverUser == null) {
-            Toast.makeText(context, "Erro: Não foi possível encontrar o perfil do destinatário.", Toast.LENGTH_SHORT).show()
-            return@addOnSuccessListener
-        }
-
-        senderDocRef.get().addOnSuccessListener { senderDoc ->
-            val senderUser = senderDoc.toObject(User::class.java)
-            if (senderUser == null) {
-                Toast.makeText(context, "Erro: Não foi possível encontrar o seu perfil.", Toast.LENGTH_SHORT).show()
-                return@addOnSuccessListener
-            }
-
-            val senderConversation = Conversation(
-                partnerId = receiverUid,
-                partnerName = receiverCustomName,
-                partnerProfilePictureUrl = receiverUser.profilePictureUrl,
-                lastMessage = lastMessage,
-                timestamp = Timestamp.now(),
-                partnerPhoneNumber = receiverUser.phoneNumber ?: "",
-                unreadCount = 0
-            )
-            senderDocRef.collection("conversations").document(receiverUid).set(senderConversation)
-
-            val receiverConversationRef = receiverDocRef.collection("conversations").document(senderUid)
-
-            val receiverUpdateMap = mapOf(
-                "partnerId" to senderUid,
-                "partnerName" to (senderUser.name ?: "Utilizador"),
-                "partnerProfilePictureUrl" to senderUser.profilePictureUrl,
-                "lastMessage" to lastMessage,
-                "timestamp" to Timestamp.now(),
-                "partnerPhoneNumber" to (senderUser.phoneNumber ?: ""),
-                "unreadCount" to FieldValue.increment(1)
-            )
-
-            receiverConversationRef.set(receiverUpdateMap, com.google.firebase.firestore.SetOptions.merge())
-                .addOnFailureListener { e ->
-                    Toast.makeText(context, "Falha ao atualizar a conversa do destinatário: ${e.message}", Toast.LENGTH_LONG).show()
-                }
-
-        }.addOnFailureListener { e ->
-            Toast.makeText(context, "Falha ao buscar o seu perfil: ${e.message}", Toast.LENGTH_LONG).show()
-        }
-    }.addOnFailureListener { e ->
-        Toast.makeText(context, "Falha ao buscar o perfil do destinatário: ${e.message}", Toast.LENGTH_LONG).show()
     }
 }
 
@@ -413,17 +375,25 @@ fun SentMessageBubble(message: Message) {
     ) {
         Box(
             modifier = Modifier
-                .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp, bottomStart = 12.dp, bottomEnd = 0.dp))
+                .clip(RoundedCornerShape(
+                    topStart = 12.dp,
+                    topEnd = 12.dp,
+                    bottomStart = 12.dp,
+                    bottomEnd = 0.dp
+                ))
                 .background(Color(0xFFDCF8C6))
                 .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
             Row(verticalAlignment = Alignment.Bottom) {
                 Text(
                     text = message.message ?: "",
-                    modifier = Modifier.padding(end = 8.dp),
+                    modifier = Modifier.padding(end = 8.dp).alignByBaseline(),
                     color = Color.Black
                 )
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.alignByBaseline()
+                ) {
                     Text(
                         text = formatTimestamp(message.timestamp),
                         fontSize = 10.sp,
@@ -438,52 +408,16 @@ fun SentMessageBubble(message: Message) {
 }
 
 @Composable
-fun ReceivedMessageBubble(message: Message) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-        horizontalArrangement = Arrangement.Start
-    ) {
-        Box(
-            modifier = Modifier
-                .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp, bottomStart = 0.dp, bottomEnd = 12.dp))
-                .background(Color.White)
-                .padding(horizontal = 12.dp, vertical = 8.dp)
-        ) {
-            Row(verticalAlignment = Alignment.Bottom) {
-                Text(
-                    text = message.message ?: "",
-                    modifier = Modifier.padding(end = 8.dp),
-                    color = Color.Black
-                )
-                Text(
-                    text = formatTimestamp(message.timestamp),
-                    fontSize = 10.sp,
-                    color = Color.Gray
-                )
-            }
-        }
-    }
-}
-
-@Composable
 fun MessageStatusIcon(status: String) {
     val (icon, color) = when (status) {
         "READ" -> Icons.Default.DoneAll to BlueCheck
         "DELIVERED" -> Icons.Default.DoneAll to Color.Gray
         else -> Icons.Default.Done to Color.Gray
     }
-
     Icon(
         imageVector = icon,
         contentDescription = "Status da Mensagem",
         modifier = Modifier.size(16.dp),
         tint = color
     )
-}
-
-private fun formatLastSeen(timestamp: Long): String {
-    if (timestamp == 0L) return "há muito tempo"
-
-    val sdf = SimpleDateFormat("dd/MM/yy 'às' HH:mm", Locale.getDefault())
-    return sdf.format(Date(timestamp))
 }

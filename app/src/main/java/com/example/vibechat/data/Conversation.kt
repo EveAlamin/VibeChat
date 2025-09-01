@@ -9,5 +9,6 @@ data class Conversation(
     val lastMessage: String = "",
     val timestamp: Timestamp = Timestamp.now(),
     val partnerPhoneNumber: String = "",
-    val unreadCount: Int = 0
+    val unreadCount: Int = 0,
+    val isGroup: Boolean = false
 )

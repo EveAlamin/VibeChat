@@ -87,7 +87,7 @@ fun SelectContactScreen(navController: NavController) {
     ) { padding ->
         LazyColumn(modifier = Modifier.padding(padding)) {
             item {
-                HeaderOption(icon = Icons.Filled.GroupAdd, text = "Novo grupo", onClick = { /* TODO */ })
+                HeaderOption(icon = Icons.Filled.GroupAdd, text = "Novo grupo", onClick = { navController.navigate("createGroup") })
                 HeaderOption(icon = Icons.Filled.PersonAdd, text = "Novo contacto", onClick = { navController.navigate("addContact") })
             }
 

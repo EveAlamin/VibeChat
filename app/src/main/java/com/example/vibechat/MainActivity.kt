@@ -100,20 +100,47 @@ class MainActivity : ComponentActivity() {
                         composable("selectContact") {
                             SelectContactScreen(navController = navController)
                         }
+
+                        composable(
+                            "groupDetails/{groupId}",
+                            arguments = listOf(navArgument("groupId") { type = NavType.StringType })
+                        ) { backStackEntry ->
+                            val groupId = backStackEntry.arguments?.getString("groupId") ?: ""
+                            GroupDetailsScreen(navController = navController, groupId = groupId)
+                        }
+
+                        composable("createGroup") {
+                            CreateGroupScreen(navController = navController)
+                        }
+
                         composable("profile") {
                             ProfileScreen(navController = navController)
                         }
                         composable(
-                            "chat/{name}/{uid}?phone={phone}",
-                            arguments = listOf(navArgument("phone") {
-                                type = NavType.StringType
-                                nullable = true
-                            })
+                            "chat/{name}/{uid}?phone={phone}&isGroup={isGroup}",
+                            arguments = listOf(
+                                navArgument("phone") {
+                                    type = NavType.StringType
+                                    nullable = true
+                                },
+                                navArgument("isGroup") {
+                                    type = NavType.BoolType
+                                    defaultValue = false
+                                }
+                            )
                         ) { backStackEntry ->
                             val name = backStackEntry.arguments?.getString("name") ?: ""
-                            val uid = backStackEntry.arguments?.getString("uid") ?: ""
+                            val uid = backStackEntry.arguments?.getString("uid") ?: "" // Este 'uid' da rota agora é o nosso 'chatId'
                             val phone = backStackEntry.arguments?.getString("phone")
-                            ChatScreen(navController = navController, name = name, receiverUid = uid, receiverPhone = phone ?: "")
+                            val isGroup = backStackEntry.arguments?.getBoolean("isGroup") ?: false
+
+                            ChatScreen(
+                                navController = navController,
+                                name = name,
+                                chatId = uid,
+                                receiverPhone = phone ?: "",
+                                isGroup = isGroup
+                            )
                         }
                     }
 

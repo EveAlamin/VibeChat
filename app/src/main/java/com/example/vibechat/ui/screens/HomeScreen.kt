@@ -160,7 +160,9 @@ fun ConversationsScreen(navController: NavController, searchQuery: String) {
     LazyColumn {
         items(filteredList) { conversation ->
             ConversationItem(conversation = conversation, onClick = {
-                navController.navigate("chat/${conversation.partnerName}/${conversation.partnerId}?phone=${conversation.partnerPhoneNumber}")
+                // Modifique a navegação para incluir se é um grupo ou não
+                val route = "chat/${conversation.partnerName}/${conversation.partnerId}?phone=${conversation.partnerPhoneNumber}&isGroup=${conversation.isGroup}"
+                navController.navigate(route)
             })
         }
     }
@@ -191,8 +193,10 @@ fun ConversationItem(conversation: Conversation, onClick: () -> Unit) {
                     contentScale = ContentScale.Crop
                 )
             } else {
+                // Lógica para mostrar ícone de pessoa ou de grupo
+                val icon = if (conversation.isGroup) Icons.Default.Groups else Icons.Default.Person
                 Icon(
-                    imageVector = Icons.Default.Person,
+                    imageVector = icon,
                     contentDescription = "Sem Foto de Perfil",
                     modifier = Modifier.size(32.dp),
                     tint = MaterialTheme.colorScheme.onSecondaryContainer
