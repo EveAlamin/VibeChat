@@ -1,5 +1,8 @@
 package com.example.vibechat.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -19,8 +22,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
@@ -37,7 +44,6 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
 import com.google.firebase.Timestamp
 import kotlinx.coroutines.launch
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
@@ -55,6 +61,20 @@ fun ChatScreen(
     val db = FirebaseFirestore.getInstance()
     val coroutineScope = rememberCoroutineScope()
     val listState = rememberLazyListState()
+    var searchQuery by remember { mutableStateOf("") }
+    var isSearchActive by remember { mutableStateOf(false) }
+
+    val filteredMessages by remember(searchQuery, messageList) {
+        derivedStateOf {
+            if (searchQuery.isBlank()) {
+                messageList
+            } else {
+                messageList.filter {
+                    it.message?.contains(searchQuery, ignoreCase = true) == true
+                }
+            }
+        }
+    }
 
     val mainCollection = if (isGroup) "groups" else "chats"
     val chatDocumentId = if (isGroup) chatId else senderUid + chatId
@@ -112,11 +132,15 @@ fun ChatScreen(
                 chatPartner = chatPartner,
                 name = name,
                 onBackClick = { navController.popBackStack() },
-                onDetailsClick = { // Renomeado de onTitleClick para onDetailsClick
+                onDetailsClick = {
                     if (isGroup) {
                         navController.navigate("groupDetails/$chatId")
                     }
-                }
+                },
+                isSearchActive = isSearchActive,
+                searchQuery = searchQuery,
+                onSearchQueryChange = { searchQuery = it },
+                onSearchClick = { isSearchActive = !isSearchActive }
             )
         },
         content = { padding ->
@@ -126,12 +150,12 @@ fun ChatScreen(
                     state = listState,
                     reverseLayout = true
                 ) {
-                    items(messageList.reversed()) { message ->
+                    items(filteredMessages.reversed()) { message ->
                         val senderName = if (isGroup && message.senderId != senderUid) membersNames[message.senderId] else null
                         if (message.senderId == senderUid) {
-                            SentMessageBubble(message = message)
+                            SentMessageBubble(message = message, searchQuery = searchQuery)
                         } else {
-                            ReceivedMessageBubble(message = message, senderName = senderName)
+                            ReceivedMessageBubble(message = message, senderName = senderName, searchQuery = searchQuery)
                         }
                     }
                 }
@@ -184,14 +208,18 @@ fun ChatScreen(
     )
 }
 
-@OptIn(ExperimentalGlideComposeApi::class)
+@OptIn(ExperimentalGlideComposeApi::class, ExperimentalMaterial3Api::class)
 @Composable
 private fun CustomChatTopBar(
     isGroup: Boolean,
     chatPartner: Any?,
     name: String,
     onBackClick: () -> Unit,
-    onDetailsClick: () -> Unit // Parâmetro renomeado
+    onDetailsClick: () -> Unit,
+    isSearchActive: Boolean,
+    searchQuery: String,
+    onSearchQueryChange: (String) -> Unit,
+    onSearchClick: () -> Unit
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -205,79 +233,135 @@ private fun CustomChatTopBar(
                 .padding(horizontal = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = onBackClick) {
-                Icon(
-                    Icons.Default.ArrowBack,
-                    contentDescription = "Voltar",
-                    tint = Color.White
+            if (isSearchActive) {
+                IconButton(onClick = {
+                    onSearchClick()
+                    onSearchQueryChange("") // Limpa a busca ao fechar
+                }) {
+                    Icon(
+                        Icons.Default.ArrowBack,
+                        contentDescription = "Fechar busca",
+                        tint = Color.White
+                    )
+                }
+                TextField(
+                    value = searchQuery,
+                    onValueChange = onSearchQueryChange,
+                    modifier = Modifier.weight(1f),
+                    placeholder = { Text("Buscar...", color = Color.White.copy(alpha = 0.7f)) },
+                    // --- CORREÇÃO APLICADA AQUI ---
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        cursorColor = Color.White,
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White
+                    )
                 )
-            }
-
-            // A área do título agora é apenas para exibição, NÃO é mais clicável
-            Row(
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(horizontal = 12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                val profilePictureUrl = if (isGroup) (chatPartner as? Group)?.groupPictureUrl else (chatPartner as? User)?.profilePictureUrl
-                val defaultIcon = if (isGroup) Icons.Default.Groups else Icons.Default.Person
-
-                Box(
+            } else {
+                IconButton(onClick = onBackClick) {
+                    Icon(
+                        Icons.Default.ArrowBack,
+                        contentDescription = "Voltar",
+                        tint = Color.White
+                    )
+                }
+                Row(
                     modifier = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.secondaryContainer),
-                    contentAlignment = Alignment.Center
+                        .weight(1f)
+                        .padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    if (profilePictureUrl != null) {
-                        GlideImage(
-                            model = profilePictureUrl,
-                            contentDescription = "Foto de $name",
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop
-                        )
-                    } else {
-                        Icon(
-                            imageVector = defaultIcon,
-                            contentDescription = "Sem Foto",
-                            modifier = Modifier.size(24.dp),
-                            tint = MaterialTheme.colorScheme.onSecondaryContainer
+                    val profilePictureUrl = if (isGroup) (chatPartner as? Group)?.groupPictureUrl else (chatPartner as? User)?.profilePictureUrl
+                    val defaultIcon = if (isGroup) Icons.Default.Groups else Icons.Default.Person
+
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.secondaryContainer),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (profilePictureUrl != null) {
+                            GlideImage(
+                                model = profilePictureUrl,
+                                contentDescription = "Foto de $name",
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop
+                            )
+                        } else {
+                            Icon(
+                                imageVector = defaultIcon,
+                                contentDescription = "Sem Foto",
+                                modifier = Modifier.size(24.dp),
+                                tint = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(12.dp))
+
+                    Column(modifier = Modifier.weight(1f, fill = false)) {
+                        Text(
+                            text = name,
+                            color = Color.White,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
-
-                Spacer(modifier = Modifier.width(12.dp))
-
-                Column(modifier = Modifier.weight(1f, fill = false)) {
-                    Text(
-                        text = name,
-                        color = Color.White,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
-
-            // --- CORREÇÃO APLICADA AQUI ---
-            // Se for um grupo, mostramos um botão de "Info" que é clicável
-            if (isGroup) {
-                IconButton(onClick = onDetailsClick) { // Usamos o novo parâmetro aqui
+                IconButton(onClick = onSearchClick) {
                     Icon(
-                        Icons.Default.Info, // Ícone mais apropriado
-                        contentDescription = "Detalhes do grupo",
+                        Icons.Default.Search,
+                        contentDescription = "Buscar",
                         tint = Color.White
                     )
+                }
+
+                if (isGroup) {
+                    IconButton(onClick = onDetailsClick) {
+                        Icon(
+                            Icons.Default.Info,
+                            contentDescription = "Detalhes do grupo",
+                            tint = Color.White
+                        )
+                    }
                 }
             }
         }
     }
 }
 
+@Composable
+fun HighlightText(text: String, query: String, color: Color) {
+    if (query.isBlank()) {
+        Text(text = text, color = Color.Black)
+        return
+    }
 
-// Funções e Composables auxiliares (sem alteração)
+    val annotatedString = buildAnnotatedString {
+        var startIndex = 0
+        while (startIndex < text.length) {
+            val index = text.indexOf(query, startIndex, ignoreCase = true)
+            if (index == -1) {
+                append(text.substring(startIndex))
+                break
+            }
+            append(text.substring(startIndex, index))
+            withStyle(style = SpanStyle(background = color)) {
+                append(text.substring(index, index + query.length))
+            }
+            startIndex = index + query.length
+        }
+    }
+    Text(annotatedString)
+}
+
+
 private fun updateLastMessage(db: FirebaseFirestore, chatId: String, lastMessage: String, isGroup: Boolean) {
     val timestamp = Timestamp.now()
     val senderUid = FirebaseAuth.getInstance().currentUser?.uid ?: return
@@ -316,7 +400,7 @@ private fun updateLastMessage(db: FirebaseFirestore, chatId: String, lastMessage
 }
 
 @Composable
-fun ReceivedMessageBubble(message: Message, senderName: String?) {
+fun ReceivedMessageBubble(message: Message, senderName: String?, searchQuery: String) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
         horizontalArrangement = Arrangement.Start
@@ -343,11 +427,12 @@ fun ReceivedMessageBubble(message: Message, senderName: String?) {
                     )
                 }
                 Row(verticalAlignment = Alignment.Bottom) {
-                    Text(
+                    HighlightText(
                         text = message.message ?: "",
-                        modifier = Modifier.padding(end = 8.dp).alignByBaseline(),
-                        color = Color.Black
+                        query = searchQuery,
+                        color = Color.Yellow
                     )
+                    Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = formatTimestamp(message.timestamp),
                         fontSize = 10.sp,
@@ -361,7 +446,7 @@ fun ReceivedMessageBubble(message: Message, senderName: String?) {
 }
 
 @Composable
-fun SentMessageBubble(message: Message) {
+fun SentMessageBubble(message: Message, searchQuery: String) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
         horizontalArrangement = Arrangement.End
@@ -378,11 +463,12 @@ fun SentMessageBubble(message: Message) {
                 .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
             Row(verticalAlignment = Alignment.Bottom) {
-                Text(
+                HighlightText(
                     text = message.message ?: "",
-                    modifier = Modifier.padding(end = 8.dp).alignByBaseline(),
-                    color = Color.Black
+                    query = searchQuery,
+                    color = Color.Yellow
                 )
+                Spacer(modifier = Modifier.width(8.dp))
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.alignByBaseline()
