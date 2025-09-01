@@ -22,11 +22,13 @@ import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import com.bumptech.glide.integration.compose.ExperimentalGlideComposeApi
 import com.bumptech.glide.integration.compose.GlideImage
+import com.example.vibechat.data.Contact
 import com.example.vibechat.data.Conversation
 import com.example.vibechat.utils.formatTimestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
+import androidx.compose.ui.text.style.TextOverflow
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -108,8 +110,9 @@ fun SearchAndFilterSection(searchQuery: String, onSearchQueryChange: (String) ->
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Pesquisar") },
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(32.dp),
-            colors = TextFieldDefaults.textFieldColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant,
+            colors = TextFieldDefaults.colors(
+                focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
                 focusedIndicatorColor = Color.Transparent,
                 unfocusedIndicatorColor = Color.Transparent
             )
@@ -130,37 +133,66 @@ fun SearchAndFilterSection(searchQuery: String, onSearchQueryChange: (String) ->
 @Composable
 fun ConversationsScreen(navController: NavController, searchQuery: String) {
     var conversationList by remember { mutableStateOf<List<Conversation>>(emptyList()) }
+    var contactList by remember { mutableStateOf<Map<String, String>>(emptyMap()) } // Map<UID, CustomName>
     val auth = FirebaseAuth.getInstance()
     val db = FirebaseFirestore.getInstance()
+    val currentUserUid = auth.currentUser?.uid
 
-    val filteredList = remember(searchQuery, conversationList) {
-        if (searchQuery.isBlank()) {
-            conversationList
-        } else {
-            conversationList.filter {
-                it.partnerName.contains(searchQuery, ignoreCase = true)
-            }
+    // Listener para buscar seus contatos e mapear UID -> Nome Personalizado
+    LaunchedEffect(currentUserUid) {
+        if (currentUserUid != null) {
+            db.collection("users").document(currentUserUid).collection("contacts")
+                .addSnapshotListener { snapshot, _ ->
+                    if (snapshot != null) {
+                        contactList = snapshot.documents.mapNotNull { doc ->
+                            val contact = doc.toObject(Contact::class.java)
+                            contact?.uid to contact?.customName
+                        }.filter { it.first != null && it.second != null && it.second!!.isNotEmpty() }
+                            .associate { it.first!! to it.second!! }
+                    }
+                }
         }
     }
 
-    LaunchedEffect(Unit) {
-        val currentUserUid = auth.currentUser?.uid
+    // Listener para buscar suas conversas
+    LaunchedEffect(currentUserUid) {
         if (currentUserUid != null) {
             db.collection("users").document(currentUserUid).collection("conversations")
                 .orderBy("timestamp", Query.Direction.DESCENDING)
                 .addSnapshotListener { snapshot, e ->
-                    if (e != null) { return@addSnapshotListener }
-                    if (snapshot != null) {
+                    if (e == null && snapshot != null) {
                         conversationList = snapshot.documents.mapNotNull { it.toObject(Conversation::class.java) }
                     }
                 }
         }
     }
 
+    // Combina as duas listas para criar a lista de exibição final
+    val displayList by remember(conversationList, contactList) {
+        derivedStateOf {
+            conversationList.map { conversation ->
+                val customName = contactList[conversation.partnerId]
+                // Se um nome personalizado existir, use-o. Senão, use o nome que está na conversa.
+                conversation.copy(partnerName = customName ?: conversation.partnerName)
+            }
+        }
+    }
+
+    val filteredList by remember(searchQuery, displayList) {
+        derivedStateOf {
+            if (searchQuery.isBlank()) {
+                displayList
+            } else {
+                displayList.filter {
+                    it.partnerName.contains(searchQuery, ignoreCase = true)
+                }
+            }
+        }
+    }
+
     LazyColumn {
         items(filteredList) { conversation ->
             ConversationItem(conversation = conversation, onClick = {
-                // Modifique a navegação para incluir se é um grupo ou não
                 val route = "chat/${conversation.partnerName}/${conversation.partnerId}?phone=${conversation.partnerPhoneNumber}&isGroup=${conversation.isGroup}"
                 navController.navigate(route)
             })
@@ -193,7 +225,6 @@ fun ConversationItem(conversation: Conversation, onClick: () -> Unit) {
                     contentScale = ContentScale.Crop
                 )
             } else {
-                // Lógica para mostrar ícone de pessoa ou de grupo
                 val icon = if (conversation.isGroup) Icons.Default.Groups else Icons.Default.Person
                 Icon(
                     imageVector = icon,
@@ -208,7 +239,7 @@ fun ConversationItem(conversation: Conversation, onClick: () -> Unit) {
 
         Column(modifier = Modifier.weight(1f)) {
             Text(text = conversation.partnerName, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold)
-            Text(text = conversation.lastMessage, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+            Text(text = conversation.lastMessage, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
 
         Column(horizontalAlignment = Alignment.End) {

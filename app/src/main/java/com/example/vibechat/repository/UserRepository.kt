@@ -13,30 +13,39 @@ class UserRepository {
 
     suspend fun addContact(phoneNumber: String, customName: String): Result<Unit> {
         return try {
-            val currentUserUid = auth.currentUser?.uid ?: return Result.failure(Exception("Utilizador não autenticado."))
+            val currentUserUid = auth.currentUser?.uid ?: return Result.failure(Exception("Usuário não autenticado."))
 
             val userQuery = usersCollection.whereEqualTo("phoneNumber", phoneNumber).limit(1).get().await()
 
             if (userQuery.isEmpty) {
-                return Result.failure(Exception("Utilizador não encontrado com este número de telefone."))
+                return Result.failure(Exception("Usuário não encontrado com este número de telefone."))
             }
 
-            val contactUser = userQuery.documents.first().toObject(User::class.java) ?: return Result.failure(Exception("Erro ao converter os dados do utilizador."))
+            val contactUser = userQuery.documents.first().toObject(User::class.java) ?: return Result.failure(Exception("Erro ao converter os dados do usuário."))
+            val contactUid = contactUser.uid!!
 
+            // Salva o contato com o nome personalizado na sua subcoleção de contatos
             val newContact = Contact(
-                uid = contactUser.uid!!,
+                uid = contactUid,
                 customName = customName,
                 phoneNumber = phoneNumber,
                 profilePictureUrl = contactUser.profilePictureUrl
             )
+            usersCollection.document(currentUserUid).collection("contacts").document(contactUid).set(newContact).await()
 
-            usersCollection.document(currentUserUid).collection("contacts").document(contactUser.uid).set(newContact).await()
-
-            val conversationRef = usersCollection.document(currentUserUid).collection("conversations").document(contactUser.uid)
-            val conversationDoc = conversationRef.get().await()
-            if (conversationDoc.exists()) {
-                conversationRef.update("partnerName", customName).await()
-            }
+            // --- CORREÇÃO APLICADA AQUI ---
+            // Cria ou atualiza a conversa para que ela apareça na HomeScreen com o nome certo
+            val conversationRef = usersCollection.document(currentUserUid).collection("conversations").document(contactUid)
+            val conversationData = com.example.vibechat.data.Conversation(
+                partnerId = contactUid,
+                partnerName = customName, // Usa o NOME PERSONALIZADO
+                partnerProfilePictureUrl = contactUser.profilePictureUrl,
+                partnerPhoneNumber = contactUser.phoneNumber ?: "",
+                isGroup = false,
+                timestamp = com.google.firebase.Timestamp.now()
+            )
+            // Usamos .set com SetOptions.merge() para criar a conversa se não existir, ou atualizar se já existir
+            conversationRef.set(conversationData, com.google.firebase.firestore.SetOptions.merge()).await()
 
             Result.success(Unit)
         } catch (e: Exception) {
@@ -77,13 +86,7 @@ class UserRepository {
         }
     }
 
-    // --- NOVAS FUNÇÕES ADICIONADAS ---
 
-    /**
-     * Atualiza a foto de perfil de um usuário em todas as conversas
-     * onde ele aparece como parceiro.
-     * Isso é crucial para que a mudança de foto se reflita para todos os seus contatos.
-     */
     suspend fun updateUserPictureInAllConversations(userId: String, newPhotoUrl: String): Result<Unit> {
         return try {
             val batch = db.batch()

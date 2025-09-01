@@ -66,6 +66,7 @@ fun ChatScreen(
     val listState = rememberLazyListState()
     var searchQuery by remember { mutableStateOf("") }
     var isSearchActive by remember { mutableStateOf(false) }
+    var currentUser by remember { mutableStateOf<User?>(null) }
 
     var pinnedMessage by remember { mutableStateOf<Message?>(null) }
 
@@ -93,6 +94,12 @@ fun ChatScreen(
                     it.message?.contains(searchQuery, ignoreCase = true) == true
                 }
             }
+        }
+    }
+
+    LaunchedEffect(senderUid) {
+        db.collection("users").document(senderUid).get().addOnSuccessListener {
+            currentUser = it.toObject(User::class.java)
         }
     }
 
@@ -128,7 +135,7 @@ fun ChatScreen(
                 .collection("messages").document(message.id).update(updatedData)
         }
         if (messageList.lastOrNull()?.id == message.id) {
-            updateLastMessage(db, chatId, "🚫 Mensagem apagada", isGroup)
+            updateLastMessage(db, chatId, "🚫 Mensagem apagada", isGroup, currentUser)
         }
     }
 
@@ -321,8 +328,7 @@ fun ChatScreen(
                     Spacer(modifier = Modifier.width(8.dp))
                     FloatingActionButton(
                         onClick = {
-                            if (messageText.isNotBlank()) {
-                                // --- CORREÇÃO APLICADA AQUI ---
+                            if (messageText.isNotBlank() && currentUser != null) {
                                 val currentMessage = messageText
                                 val messageId = db.collection("chats").document().id
                                 val messageObject = Message(
@@ -339,7 +345,7 @@ fun ChatScreen(
                                         db.collection("chats").document(receiverRoomId)
                                             .collection("messages").document(messageId).set(messageObject)
                                     }
-                                    updateLastMessage(db, chatId, currentMessage, isGroup)
+                                    updateLastMessage(db, chatId, currentMessage, isGroup, currentUser)
                                 }
                                 messageText = ""
                             }
@@ -597,9 +603,10 @@ fun HighlightText(text: String, query: String, color: Color) {
 }
 
 
-private fun updateLastMessage(db: FirebaseFirestore, chatId: String, lastMessage: String, isGroup: Boolean) {
+private fun updateLastMessage(db: FirebaseFirestore, chatId: String, lastMessage: String, isGroup: Boolean, sender: User?) {
+    if (sender == null) return
     val timestamp = Timestamp.now()
-    val senderUid = FirebaseAuth.getInstance().currentUser?.uid ?: return
+    val senderUid = sender.uid ?: return
 
     if (isGroup) {
         db.collection("groups").document(chatId).get().addOnSuccessListener { groupDoc ->
@@ -624,18 +631,22 @@ private fun updateLastMessage(db: FirebaseFirestore, chatId: String, lastMessage
         }
     } else {
         val receiverUid = chatId
-        val conversationRefSender = db.collection("users").document(senderUid)
-            .collection("conversations").document(receiverUid)
-        val conversationRefReceiver = db.collection("users").document(receiverUid)
-            .collection("conversations").document(senderUid)
+        val conversationRefSender = db.collection("users").document(senderUid).collection("conversations").document(receiverUid)
+        val conversationRefReceiver = db.collection("users").document(receiverUid).collection("conversations").document(senderUid)
 
-        conversationRefSender.update("lastMessage", "Você: $lastMessage", "timestamp", timestamp)
+        conversationRefSender.set(mapOf("lastMessage" to "Você: $lastMessage", "timestamp" to timestamp), SetOptions.merge())
 
-        conversationRefReceiver.update(
-            "lastMessage", lastMessage,
-            "timestamp", timestamp,
-            "unreadCount", FieldValue.increment(1)
+        val receiverConversationData = mapOf(
+            "partnerId" to senderUid,
+            "partnerName" to (sender.name ?: ""),
+            "partnerProfilePictureUrl" to sender.profilePictureUrl,
+            "partnerPhoneNumber" to (sender.phoneNumber ?: ""),
+            "lastMessage" to lastMessage,
+            "timestamp" to timestamp,
+            "unreadCount" to FieldValue.increment(1),
+            "isGroup" to false
         )
+        conversationRefReceiver.set(receiverConversationData, SetOptions.merge())
     }
 }
 
