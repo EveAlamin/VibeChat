@@ -28,7 +28,7 @@ fun AddContactScreen(navController: NavController, prefilledPhone: String?) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Adicionar Novo Contacto") },
+                title = { Text("Adicionar Novo Contato") },
                 navigationIcon = {
                     IconButton(onClick = { navController.popBackStack() }) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Voltar")
@@ -48,7 +48,7 @@ fun AddContactScreen(navController: NavController, prefilledPhone: String?) {
             OutlinedTextField(
                 value = phoneNumber,
                 onValueChange = { phoneNumber = it },
-                label = { Text("Número de Telefone do Contacto") },
+                label = { Text("Número de Telefone do Contato") },
                 modifier = Modifier.fillMaxWidth()
             )
             Spacer(modifier = Modifier.height(16.dp))
@@ -56,7 +56,7 @@ fun AddContactScreen(navController: NavController, prefilledPhone: String?) {
             OutlinedTextField(
                 value = customName,
                 onValueChange = { customName = it },
-                label = { Text("Nome para o Contacto") },
+                label = { Text("Nome para o Contato") },
                 modifier = Modifier.fillMaxWidth()
             )
             Spacer(modifier = Modifier.height(24.dp))
@@ -68,7 +68,7 @@ fun AddContactScreen(navController: NavController, prefilledPhone: String?) {
                         coroutineScope.launch {
                             val result = userRepository.addContact(phoneNumber, customName)
                             result.onSuccess {
-                                Toast.makeText(context, "Contacto adicionado!", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Contato adicionado!", Toast.LENGTH_SHORT).show()
                                 navController.popBackStack()
                             }
                             result.onFailure {
@@ -84,7 +84,7 @@ fun AddContactScreen(navController: NavController, prefilledPhone: String?) {
                 if (isLoading) {
                     CircularProgressIndicator(color = Color.White)
                 } else {
-                    Text("Guardar Contacto", color = Color.White)
+                    Text("Salvar Contato", color = Color.White)
                 }
             }
         }

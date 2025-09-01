@@ -76,7 +76,7 @@ fun SelectContactScreen(navController: NavController) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Selecionar Contacto") },
+                title = { Text("Selecionar Contato") },
                 navigationIcon = {
                     IconButton(onClick = { navController.popBackStack() }) {
                         Icon(Icons.Filled.ArrowBack, contentDescription = "Voltar")
@@ -88,7 +88,7 @@ fun SelectContactScreen(navController: NavController) {
         LazyColumn(modifier = Modifier.padding(padding)) {
             item {
                 HeaderOption(icon = Icons.Filled.GroupAdd, text = "Novo grupo", onClick = { navController.navigate("createGroup") })
-                HeaderOption(icon = Icons.Filled.PersonAdd, text = "Novo contacto", onClick = { navController.navigate("addContact") })
+                HeaderOption(icon = Icons.Filled.PersonAdd, text = "Novo contato", onClick = { navController.navigate("addContact") })
             }
 
             items(contactList) { contact ->
@@ -100,7 +100,7 @@ fun SelectContactScreen(navController: NavController) {
                                 popUpTo("home")
                             }
                         } else {
-                            Toast.makeText(context, "Dados do contacto incompletos.", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Dados do contato incompletos.", Toast.LENGTH_SHORT).show()
                         }
                     },
                     onDeleteClick = {
@@ -114,8 +114,8 @@ fun SelectContactScreen(navController: NavController) {
         if (showDeleteDialog) {
             AlertDialog(
                 onDismissRequest = { showDeleteDialog = false },
-                title = { Text("Apagar Contacto") },
-                text = { Text("Tem a certeza de que quer apagar ${contactToDelete?.name} da sua lista de contactos?") },
+                title = { Text("Apagar Contato") },
+                text = { Text("Tem a certeza de que quer apagar ${contactToDelete?.name} da sua lista de contatos?") },
                 confirmButton = {
                     Button(
                         onClick = {
@@ -126,7 +126,7 @@ fun SelectContactScreen(navController: NavController) {
                                     coroutineScope.launch {
                                         val result = userRepository.deleteContact(contact.uid)
                                         result.onSuccess {
-                                            Toast.makeText(context, "Contacto apagado.", Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(context, "Contato apagado.", Toast.LENGTH_SHORT).show()
                                         }
                                         result.onFailure {
                                             Toast.makeText(context, "Erro ao apagar: ${it.message}", Toast.LENGTH_LONG).show()
@@ -135,7 +135,7 @@ fun SelectContactScreen(navController: NavController) {
                                         contactToDelete = null
                                     }
                                 } else {
-                                    Toast.makeText(context, "Erro: ID do contacto inválido.", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "Erro: ID do contato inválido.", Toast.LENGTH_SHORT).show()
                                     showDeleteDialog = false
                                     contactToDelete = null
                                 }
