@@ -3,9 +3,9 @@ package com.example.vibechat.ui.screens
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -14,7 +14,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
-import androidx.compose.material.ripple.rememberRipple
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -22,7 +21,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -33,18 +31,20 @@ import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import com.bumptech.glide.integration.compose.ExperimentalGlideComposeApi
 import com.bumptech.glide.integration.compose.GlideImage
+import com.example.vibechat.data.Conversation
 import com.example.vibechat.data.Group
 import com.example.vibechat.data.Message
 import com.example.vibechat.data.User
 import com.example.vibechat.ui.theme.BlueCheck
 import com.example.vibechat.utils.formatTimestamp
+import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
-import com.google.firebase.Timestamp
 import kotlinx.coroutines.launch
-@OptIn(ExperimentalMaterial3Api::class)
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ChatScreen(
     navController: NavController,
@@ -64,6 +64,12 @@ fun ChatScreen(
     var searchQuery by remember { mutableStateOf("") }
     var isSearchActive by remember { mutableStateOf(false) }
 
+    var pinnedMessage by remember { mutableStateOf<Message?>(null) }
+
+    val mainCollection = if (isGroup) "groups" else "chats"
+    val chatDocumentId = if (isGroup) chatId else getChatRoomId(senderUid, chatId)
+    val chatDocRef = db.collection(mainCollection).document(chatDocumentId)
+
     val filteredMessages by remember(searchQuery, messageList) {
         derivedStateOf {
             if (searchQuery.isBlank()) {
@@ -76,28 +82,45 @@ fun ChatScreen(
         }
     }
 
-    val mainCollection = if (isGroup) "groups" else "chats"
-    val chatDocumentId = if (isGroup) chatId else senderUid + chatId
+    fun updatePinnedMessage(messageId: String?) {
+        val conversationRefSender = db.collection("users").document(senderUid).collection("conversations").document(chatId)
 
-    LaunchedEffect(isGroup, chatId) {
         if (isGroup) {
+            // Em grupo, atualiza para todos os membros
             db.collection("groups").document(chatId).get().addOnSuccessListener { groupDoc ->
                 val memberIds = groupDoc.toObject(Group::class.java)?.memberIds ?: emptyList()
-                if (memberIds.isNotEmpty()) {
-                    db.collection("users").whereIn("uid", memberIds).get().addOnSuccessListener { usersDoc ->
-                        usersDoc.forEach { userDoc ->
-                            val user = userDoc.toObject(User::class.java)
-                            if (user.uid != null && user.name != null) {
-                                membersNames[user.uid] = user.name
-                            }
-                        }
-                    }
+                val batch = db.batch()
+                memberIds.forEach { memberId ->
+                    val conversationRef = db.collection("users").document(memberId).collection("conversations").document(chatId)
+                    batch.update(conversationRef, "pinnedMessageId", messageId)
                 }
+                batch.commit()
             }
+        } else {
+            // Em chat normal, atualiza para ambos
+            val conversationRefReceiver = db.collection("users").document(chatId).collection("conversations").document(senderUid)
+            conversationRefSender.update("pinnedMessageId", messageId)
+            conversationRefReceiver.update("pinnedMessageId", messageId)
         }
     }
 
     DisposableEffect(chatId) {
+        val conversationListener = db.collection("users").document(senderUid)
+            .collection("conversations").document(chatId)
+            .addSnapshotListener { snapshot, _ ->
+                val conversation = snapshot?.toObject(Conversation::class.java)
+                val pinnedId = conversation?.pinnedMessageId
+                if (pinnedId != null) {
+                    chatDocRef.collection("messages").document(pinnedId).get()
+                        .addOnSuccessListener { messageDoc ->
+                            pinnedMessage = messageDoc.toObject(Message::class.java)
+                        }
+                } else {
+                    pinnedMessage = null
+                }
+            }
+
+        // ... (resto do DisposableEffect permanece o mesmo)
         db.collection("users").document(senderUid)
             .collection("conversations").document(chatId)
             .update("unreadCount", 0)
@@ -112,7 +135,7 @@ fun ChatScreen(
             }
         }
 
-        val messagesListener = db.collection(mainCollection).document(chatDocumentId).collection("messages")
+        val messagesListener = chatDocRef.collection("messages")
             .orderBy("timestamp", Query.Direction.ASCENDING)
             .addSnapshotListener { snapshot, e ->
                 if (e != null || snapshot == null) return@addSnapshotListener
@@ -120,10 +143,12 @@ fun ChatScreen(
             }
 
         onDispose {
+            conversationListener.remove()
             detailsListener.remove()
             messagesListener.remove()
         }
     }
+
 
     Scaffold(
         topBar = {
@@ -145,17 +170,51 @@ fun ChatScreen(
         },
         content = { padding ->
             Column(modifier = Modifier.fillMaxSize().padding(padding).background(Color(0xFFECE5DD))) {
+                AnimatedVisibility(visible = pinnedMessage != null, enter = fadeIn(), exit = fadeOut()) {
+                    PinnedMessageBar(
+                        message = pinnedMessage,
+                        senderName = membersNames[pinnedMessage?.senderId] ?: "Eu",
+                        onUnpin = { updatePinnedMessage(null) }
+                    )
+                }
+
                 LazyColumn(
                     modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
                     state = listState,
                     reverseLayout = true
                 ) {
                     items(filteredMessages.reversed()) { message ->
+                        var showMessageMenu by remember { mutableStateOf(false) }
                         val senderName = if (isGroup && message.senderId != senderUid) membersNames[message.senderId] else null
-                        if (message.senderId == senderUid) {
-                            SentMessageBubble(message = message, searchQuery = searchQuery)
-                        } else {
-                            ReceivedMessageBubble(message = message, senderName = senderName, searchQuery = searchQuery)
+
+                        Box {
+                            val messageBubble: @Composable () -> Unit = {
+                                if (message.senderId == senderUid) {
+                                    SentMessageBubble(message = message, searchQuery = searchQuery)
+                                } else {
+                                    ReceivedMessageBubble(message = message, senderName = senderName, searchQuery = searchQuery)
+                                }
+                            }
+
+                            Box(modifier = Modifier.combinedClickable(
+                                onClick = {},
+                                onLongClick = { showMessageMenu = true }
+                            )) {
+                                messageBubble()
+                            }
+
+                            DropdownMenu(
+                                expanded = showMessageMenu,
+                                onDismissRequest = { showMessageMenu = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Fixar") },
+                                    onClick = {
+                                        updatePinnedMessage(message.id)
+                                        showMessageMenu = false
+                                    }
+                                )
+                            }
                         }
                     }
                 }
@@ -167,7 +226,7 @@ fun ChatScreen(
                         modifier = Modifier.weight(1f),
                         placeholder = { Text("Digite uma mensagem...") },
                         shape = RoundedCornerShape(24.dp),
-                        colors = TextFieldDefaults.textFieldColors(
+                        colors = TextFieldDefaults.colors(
                             focusedIndicatorColor = Color.Transparent,
                             unfocusedIndicatorColor = Color.Transparent
                         )
@@ -185,11 +244,10 @@ fun ChatScreen(
                                 )
 
                                 coroutineScope.launch {
-                                    db.collection(mainCollection).document(chatDocumentId)
-                                        .collection("messages").document(messageId).set(messageObject)
+                                    chatDocRef.collection("messages").document(messageId).set(messageObject)
                                     if (!isGroup) {
-                                        val receiverRoom = chatId + senderUid
-                                        db.collection("chats").document(receiverRoom)
+                                        val receiverRoomId = getChatRoomId(chatId, senderUid)
+                                        db.collection("chats").document(receiverRoomId)
                                             .collection("messages").document(messageId).set(messageObject)
                                     }
                                     updateLastMessage(db, chatId, messageText, isGroup)
@@ -207,6 +265,48 @@ fun ChatScreen(
         }
     )
 }
+
+// Adicione esta função auxiliar ao final do arquivo
+private fun getChatRoomId(user1: String, user2: String): String {
+    return if (user1 < user2) {
+        "$user1$user2"
+    } else {
+        "$user2$user1"
+    }
+}
+
+// O restante do arquivo (PinnedMessageBar, CustomChatTopBar, MessageBubbles, etc.) permanece o mesmo.
+@Composable
+fun PinnedMessageBar(message: Message?, senderName: String, onUnpin: () -> Unit) {
+    if (message == null) return
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = senderName,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary,
+                fontSize = 12.sp
+            )
+            Text(
+                text = message.message ?: "",
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+        IconButton(onClick = onUnpin) {
+            Icon(Icons.Default.Close, contentDescription = "Desafixar mensagem", modifier = Modifier.size(18.dp))
+        }
+    }
+}
+
 
 @OptIn(ExperimentalGlideComposeApi::class, ExperimentalMaterial3Api::class)
 @Composable
@@ -249,7 +349,6 @@ private fun CustomChatTopBar(
                     onValueChange = onSearchQueryChange,
                     modifier = Modifier.weight(1f),
                     placeholder = { Text("Buscar...", color = Color.White.copy(alpha = 0.7f)) },
-                    // --- CORREÇÃO APLICADA AQUI ---
                     colors = TextFieldDefaults.colors(
                         focusedContainerColor = Color.Transparent,
                         unfocusedContainerColor = Color.Transparent,

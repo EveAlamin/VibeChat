@@ -12,5 +12,6 @@ data class Conversation(
     val partnerPhoneNumber: String = "",
     val unreadCount: Int = 0,
     @get:PropertyName("isGroup") @set:PropertyName("isGroup")
-    var isGroup: Boolean = false
+    var isGroup: Boolean = false,
+    val pinnedMessageId: String? = null
 )

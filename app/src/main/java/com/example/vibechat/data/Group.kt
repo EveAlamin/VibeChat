@@ -9,5 +9,6 @@ data class Group(
     val adminIds: List<String> = emptyList(),
     val groupPictureUrl: String? = null,
     val lastMessage: String = "",
-    val timestamp: com.google.firebase.Timestamp? = null
+    val timestamp: com.google.firebase.Timestamp? = null,
+    val pinnedMessageId: String? = null
 )
