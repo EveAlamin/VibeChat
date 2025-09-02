@@ -36,6 +36,7 @@ fun HomeScreen(navController: NavController) {
     var showMenu by remember { mutableStateOf(false) }
     val auth = FirebaseAuth.getInstance()
     var searchQuery by remember { mutableStateOf("") }
+    var selectedFilter by remember { mutableStateOf("Todas") }
 
     Scaffold(
         topBar = {
@@ -89,17 +90,23 @@ fun HomeScreen(navController: NavController) {
         Column(modifier = Modifier.padding(padding)) {
             SearchAndFilterSection(
                 searchQuery = searchQuery,
-                onSearchQueryChange = { searchQuery = it }
+                onSearchQueryChange = { searchQuery = it },
+                selectedFilter = selectedFilter,
+                onFilterSelected = { selectedFilter = it }
             )
-            ConversationsScreen(navController, searchQuery)
+            ConversationsScreen(navController, searchQuery, selectedFilter)
         }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SearchAndFilterSection(searchQuery: String, onSearchQueryChange: (String) -> Unit) {
-    var selectedFilter by remember { mutableStateOf("Todas") }
+fun SearchAndFilterSection(
+    searchQuery: String,
+    onSearchQueryChange: (String) -> Unit,
+    selectedFilter: String,
+    onFilterSelected: (String) -> Unit
+) {
     val filters = listOf("Todas", "Não lidas", "Grupos")
 
     Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
@@ -122,7 +129,7 @@ fun SearchAndFilterSection(searchQuery: String, onSearchQueryChange: (String) ->
             filters.forEach { filter ->
                 FilterChip(
                     selected = selectedFilter == filter,
-                    onClick = { selectedFilter = filter },
+                    onClick = { onFilterSelected(filter) },
                     label = { Text(filter) }
                 )
             }
@@ -131,7 +138,7 @@ fun SearchAndFilterSection(searchQuery: String, onSearchQueryChange: (String) ->
 }
 
 @Composable
-fun ConversationsScreen(navController: NavController, searchQuery: String) {
+fun ConversationsScreen(navController: NavController, searchQuery: String, selectedFilter: String) {
     var conversationList by remember { mutableStateOf<List<Conversation>>(emptyList()) }
     var contactList by remember { mutableStateOf<Map<String, String>>(emptyMap()) } // Map<UID, CustomName>
     val auth = FirebaseAuth.getInstance()
@@ -178,14 +185,19 @@ fun ConversationsScreen(navController: NavController, searchQuery: String) {
         }
     }
 
-    val filteredList by remember(searchQuery, displayList) {
+    val filteredList by remember(searchQuery, displayList, selectedFilter) {
         derivedStateOf {
-            if (searchQuery.isBlank()) {
+            val searchedList = if (searchQuery.isBlank()) {
                 displayList
             } else {
                 displayList.filter {
                     it.partnerName.contains(searchQuery, ignoreCase = true)
                 }
+            }
+            when (selectedFilter) {
+                "Não lidas" -> searchedList.filter { it.unreadCount > 0 }
+                "Grupos" -> searchedList.filter { it.isGroup }
+                else -> searchedList
             }
         }
     }
