@@ -9,5 +9,6 @@ data class Message(
     val senderId: String? = null,
     val timestamp: Timestamp? = null,
     val status: String = "SENT",
-    val wasDeleted: Boolean = false
+    val wasDeleted: Boolean = false,
+    val readBy: List<String> = emptyList()
 )

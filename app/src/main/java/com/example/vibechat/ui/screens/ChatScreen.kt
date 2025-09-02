@@ -105,6 +105,28 @@ fun ChatScreen(
         }
     }
 
+    // Efeito para marcar mensagens como lidas
+    LaunchedEffect(visibleMessages, listState) {
+        val unreadMessages = visibleMessages
+            .filter { it.senderId != senderUid && !it.readBy.contains(senderUid) }
+
+        if (unreadMessages.isNotEmpty()) {
+            val batch = db.batch()
+            unreadMessages.forEach { message ->
+                val messageRef = chatDocRef.collection("messages").document(message.id)
+                batch.update(messageRef, "readBy", FieldValue.arrayUnion(senderUid))
+
+                if (!isGroup) {
+                    val receiverRoomId = getChatRoomId(chatId, senderUid)
+                    val receiverMessageRef = db.collection("chats").document(receiverRoomId)
+                        .collection("messages").document(message.id)
+                    batch.update(receiverMessageRef, "readBy", FieldValue.arrayUnion(senderUid))
+                }
+            }
+            batch.commit()
+        }
+    }
+
     fun updatePinnedMessage(messageId: String?) {
         val conversationRefSender = db.collection("users").document(senderUid).collection("conversations").document(chatId)
 
@@ -189,10 +211,6 @@ fun ChatScreen(
                 locallyDeletedIds = ids?.toSet() ?: emptySet()
             }
 
-        db.collection("users").document(senderUid)
-            .collection("conversations").document(chatId)
-            .update("unreadCount", 0)
-
         val detailsListener = if (isGroup) {
             db.collection("groups").document(chatId).addSnapshotListener { snapshot, _ ->
                 chatPartner = snapshot?.toObject(Group::class.java)
@@ -208,6 +226,13 @@ fun ChatScreen(
             .addSnapshotListener { snapshot, e ->
                 if (e != null || snapshot == null) return@addSnapshotListener
                 messageList = snapshot.documents.mapNotNull { it.toObject(Message::class.java) }
+
+                // *** CORREÇÃO APLICADA AQUI ***
+                // Garante que, enquanto o utilizador estiver neste ecrã,
+                // o contador de não lidas para esta conversa será sempre zero.
+                db.collection("users").document(senderUid)
+                    .collection("conversations").document(chatId)
+                    .update("unreadCount", 0)
             }
 
         onDispose {
@@ -259,7 +284,12 @@ fun ChatScreen(
                         Box {
                             val messageBubble: @Composable () -> Unit = {
                                 if (message.senderId == senderUid) {
-                                    SentMessageBubble(message = message, searchQuery = searchQuery)
+                                    SentMessageBubble(
+                                        message = message,
+                                        searchQuery = searchQuery,
+                                        isGroup = isGroup,
+                                        partnerId = chatId
+                                    )
                                 } else {
                                     ReceivedMessageBubble(message = message, senderName = senderName, searchQuery = searchQuery)
                                 }
@@ -652,7 +682,6 @@ private fun updateLastMessage(db: FirebaseFirestore, chatId: String, lastMessage
     }
 }
 
-// Substitua a sua função ReceivedMessageBubble por esta
 @Composable
 fun ReceivedMessageBubble(message: Message, senderName: String?, searchQuery: String) {
     val configuration = LocalConfiguration.current
@@ -664,7 +693,7 @@ fun ReceivedMessageBubble(message: Message, senderName: String?, searchQuery: St
     ) {
         Box(
             modifier = Modifier
-                .widthIn(max = screenWidth * 0.8f) // <--- LIMITE DE LARGURA ADICIONADO
+                .widthIn(max = screenWidth * 0.8f)
                 .clip(RoundedCornerShape(
                     topStart = 12.dp,
                     topEnd = 12.dp,
@@ -686,7 +715,6 @@ fun ReceivedMessageBubble(message: Message, senderName: String?, searchQuery: St
                 }
 
                 Row(verticalAlignment = Alignment.Bottom) {
-                    // O texto agora tem um peso para não empurrar a hora para fora
                     Box(modifier = Modifier.weight(1f, fill = false)) {
                         if (message.wasDeleted) {
                             Text(
@@ -714,9 +742,8 @@ fun ReceivedMessageBubble(message: Message, senderName: String?, searchQuery: St
     }
 }
 
-// Substitua a sua função SentMessageBubble por esta
 @Composable
-fun SentMessageBubble(message: Message, searchQuery: String) {
+fun SentMessageBubble(message: Message, searchQuery: String, isGroup: Boolean, partnerId: String) {
     val configuration = LocalConfiguration.current
     val screenWidth = configuration.screenWidthDp.dp
 
@@ -726,7 +753,7 @@ fun SentMessageBubble(message: Message, searchQuery: String) {
     ) {
         Box(
             modifier = Modifier
-                .widthIn(max = screenWidth * 0.8f) // <--- LIMITE DE LARGURA ADICIONADO
+                .widthIn(max = screenWidth * 0.8f)
                 .clip(RoundedCornerShape(
                     topStart = 12.dp,
                     topEnd = 12.dp,
@@ -737,7 +764,6 @@ fun SentMessageBubble(message: Message, searchQuery: String) {
                 .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
             Row(verticalAlignment = Alignment.Bottom) {
-                // O texto agora tem um peso para não empurrar a hora para fora
                 Box(modifier = Modifier.weight(1f, fill = false)) {
                     if (message.wasDeleted) {
                         Text(
@@ -763,7 +789,7 @@ fun SentMessageBubble(message: Message, searchQuery: String) {
                         color = Color.Gray
                     )
                     Spacer(modifier = Modifier.width(4.dp))
-                    MessageStatusIcon(status = message.status)
+                    MessageStatusIcon(message = message, isGroup = isGroup, partnerId = partnerId)
                 }
             }
         }
@@ -771,10 +797,15 @@ fun SentMessageBubble(message: Message, searchQuery: String) {
 }
 
 @Composable
-fun MessageStatusIcon(status: String) {
-    val (icon, color) = when (status) {
-        "READ" -> Icons.Default.DoneAll to BlueCheck
-        "DELIVERED" -> Icons.Default.DoneAll to Color.Gray
+fun MessageStatusIcon(message: Message, isGroup: Boolean, partnerId: String) {
+    val isRead = if (isGroup) {
+        message.readBy.size > 1
+    } else {
+        message.readBy.contains(partnerId)
+    }
+
+    val (icon, color) = when {
+        isRead -> Icons.Default.DoneAll to BlueCheck
         else -> Icons.Default.Done to Color.Gray
     }
     Icon(
