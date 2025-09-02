@@ -9,5 +9,5 @@ data class Message(
     val senderId: String? = null,
     val timestamp: Timestamp? = null,
     val status: String = "SENT",
-    val mediaUrl: String? = null // ✨ Novo campo para armazenar a URL da mídia
+    val wasDeleted: Boolean = false
 )
