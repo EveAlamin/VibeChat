@@ -20,7 +20,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.vibechat.ui.screens.*
 import com.example.vibechat.ui.theme.VibeChatTheme
-import com.example.vibechat.utils.PresenceManager // <-- ADICIONADO
+import com.example.vibechat.utils.PresenceManager
 import com.google.firebase.auth.FirebaseAuth
 
 class MainActivity : ComponentActivity() {
@@ -44,7 +44,7 @@ class MainActivity : ComponentActivity() {
         askNotificationPermission()
 
         // Inicializa o gerenciador de presença assim que o app abre
-        PresenceManager.initialize() // <-- ADICIONADO
+        PresenceManager.initialize()
 
         setContent {
             VibeChatTheme {
@@ -126,6 +126,15 @@ class MainActivity : ComponentActivity() {
                         composable("profile") {
                             ProfileScreen(navController = navController)
                         }
+
+                        composable(
+                            "contactProfile/{userId}",
+                            arguments = listOf(navArgument("userId") { type = NavType.StringType })
+                        ) { backStackEntry ->
+                            val userId = backStackEntry.arguments?.getString("userId") ?: ""
+                            ContactProfileScreen(navController = navController, userId = userId)
+                        }
+
                         composable(
                             "chat/{name}/{uid}?phone={phone}&isGroup={isGroup}",
                             arguments = listOf(
@@ -172,7 +181,7 @@ class MainActivity : ComponentActivity() {
     }
 
     // Define o usuário como offline quando o app é completamente fechado
-    override fun onDestroy() { // <-- ADICIONADO
+    override fun onDestroy() {
         super.onDestroy()
         PresenceManager.goOffline()
     }

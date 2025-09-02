@@ -6,6 +6,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -227,9 +228,6 @@ fun ChatScreen(
                 if (e != null || snapshot == null) return@addSnapshotListener
                 messageList = snapshot.documents.mapNotNull { it.toObject(Message::class.java) }
 
-                // *** CORREÇÃO APLICADA AQUI ***
-                // Garante que, enquanto o utilizador estiver neste ecrã,
-                // o contador de não lidas para esta conversa será sempre zero.
                 db.collection("users").document(senderUid)
                     .collection("conversations").document(chatId)
                     .update("unreadCount", 0)
@@ -254,6 +252,8 @@ fun ChatScreen(
                 onDetailsClick = {
                     if (isGroup) {
                         navController.navigate("groupDetails/$chatId")
+                    } else {
+                        navController.navigate("contactProfile/$chatId")
                     }
                 },
                 isSearchActive = isSearchActive,
@@ -367,7 +367,8 @@ fun ChatScreen(
                                     id = messageId,
                                     message = currentMessage,
                                     senderId = senderUid,
-                                    timestamp = Timestamp.now()
+                                    timestamp = Timestamp.now(),
+                                    readBy = listOf(senderUid) // Adiciona o remetente à lista de lidos
                                 )
 
                                 coroutineScope.launch {
@@ -544,7 +545,10 @@ private fun CustomChatTopBar(
                 Row(
                     modifier = Modifier
                         .weight(1f)
-                        .padding(horizontal = 12.dp),
+                        .padding(horizontal = 12.dp)
+                        .clickable(enabled = !isGroup) {
+                            onDetailsClick()
+                        },
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     val profilePictureUrl = if (isGroup) (chatPartner as? Group)?.groupPictureUrl else (chatPartner as? User)?.profilePictureUrl
@@ -799,13 +803,17 @@ fun SentMessageBubble(message: Message, searchQuery: String, isGroup: Boolean, p
 @Composable
 fun MessageStatusIcon(message: Message, isGroup: Boolean, partnerId: String) {
     val isRead = if (isGroup) {
+        // Em um grupo, consideramos "lido" se mais alguém além do remetente leu.
         message.readBy.size > 1
     } else {
+        // Em um chat individual, se o parceiro leu.
         message.readBy.contains(partnerId)
     }
 
     val (icon, color) = when {
         isRead -> Icons.Default.DoneAll to BlueCheck
+        // Aqui você poderia adicionar uma lógica para "DELIVERED" se quisesse,
+        // mas por enquanto, mantemos simples.
         else -> Icons.Default.Done to Color.Gray
     }
     Icon(
