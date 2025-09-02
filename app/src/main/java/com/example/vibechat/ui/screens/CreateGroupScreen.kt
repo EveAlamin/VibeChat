@@ -24,7 +24,7 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.bumptech.glide.integration.compose.ExperimentalGlideComposeApi
 import com.bumptech.glide.integration.compose.GlideImage
-import com.example.vibechat.data.User
+import com.example.vibechat.data.Contact
 import com.example.vibechat.repository.GroupRepository
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
@@ -35,31 +35,26 @@ import kotlinx.coroutines.launch
 fun CreateGroupScreen(navController: NavController) {
     var groupName by remember { mutableStateOf("") }
     var imageUri by remember { mutableStateOf<Uri?>(null) }
-    var contactList by remember { mutableStateOf<List<User>>(emptyList()) }
-    var selectedContacts by remember { mutableStateOf<Set<User>>(emptySet()) }
-    var isLoading by remember { mutableStateOf(false) } // Estado de carregamento
+    var contactList by remember { mutableStateOf<List<Contact>>(emptyList()) }
+    var selectedContacts by remember { mutableStateOf<Set<Contact>>(emptySet()) }
+    var isLoading by remember { mutableStateOf(false) }
 
     val auth = FirebaseAuth.getInstance()
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    val groupRepository = remember { GroupRepository() } // Instancia o repository
+    val groupRepository = remember { GroupRepository() }
 
-    // Lógica para buscar os contatos do usuário (similar à SelectContactScreen)
     DisposableEffect(auth.currentUser?.uid) {
         val currentUser = auth.currentUser ?: return@DisposableEffect onDispose {}
         val db = FirebaseFirestore.getInstance()
         val contactsRef = db.collection("users").document(currentUser.uid).collection("contacts")
 
         val listener = contactsRef.addSnapshotListener { contactsSnapshot, error ->
-            if (error != null || contactsSnapshot == null) return@addSnapshotListener
-            val contactIds = contactsSnapshot.documents.map { it.id }
-            if (contactIds.isNotEmpty()) {
-                db.collection("users").whereIn("uid", contactIds)
-                    .get()
-                    .addOnSuccessListener { usersSnapshot ->
-                        contactList = usersSnapshot.toObjects(User::class.java)
-                    }
+            if (error != null || contactsSnapshot == null) {
+                contactList = emptyList()
+                return@addSnapshotListener
             }
+            contactList = contactsSnapshot.toObjects(Contact::class.java)
         }
         onDispose { listener.remove() }
     }
@@ -83,7 +78,6 @@ fun CreateGroupScreen(navController: NavController) {
         floatingActionButton = {
             FloatingActionButton(
                 onClick = {
-                    // Validações básicas
                     if (groupName.isBlank()) {
                         Toast.makeText(context, "O nome do grupo não pode estar vazio.", Toast.LENGTH_SHORT).show()
                         return@FloatingActionButton
@@ -101,11 +95,10 @@ fun CreateGroupScreen(navController: NavController) {
                             members = selectedContacts.toList()
                         )
 
-                        result.onSuccess { groupId ->
+                        result.onSuccess {
                             isLoading = false
                             Toast.makeText(context, "Grupo criado com sucesso!", Toast.LENGTH_SHORT).show()
-                            // TODO: Navegar para a tela de chat do grupo
-                            navController.popBackStack() // Por enquanto, apenas voltamos
+                            navController.popBackStack()
                         }
 
                         result.onFailure { error ->
@@ -125,7 +118,6 @@ fun CreateGroupScreen(navController: NavController) {
         }
     ) { padding ->
         Column(modifier = Modifier.padding(padding)) {
-            // Seção para nome e foto do grupo
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -167,7 +159,6 @@ fun CreateGroupScreen(navController: NavController) {
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
             )
 
-            // Lista de Contatos para Seleção
             LazyColumn {
                 items(contactList) { contact ->
                     ContactSelectionItem(
@@ -189,11 +180,10 @@ fun CreateGroupScreen(navController: NavController) {
     }
 }
 
-// O Composable 'ContactSelectionItem' permanece o mesmo de antes
 @OptIn(ExperimentalGlideComposeApi::class)
 @Composable
 fun ContactSelectionItem(
-    contact: User,
+    contact: Contact,
     isSelected: Boolean,
     onSelectionChanged: () -> Unit
 ) {
@@ -215,7 +205,7 @@ fun ContactSelectionItem(
                 if (!contact.profilePictureUrl.isNullOrEmpty()) {
                     GlideImage(
                         model = contact.profilePictureUrl,
-                        contentDescription = "Foto de ${contact.name}",
+                        contentDescription = "Foto de ${contact.customName}",
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop
                     )
@@ -238,7 +228,7 @@ fun ContactSelectionItem(
             }
         }
         Spacer(modifier = Modifier.width(16.dp))
-        Text(text = contact.name ?: "Utilizador", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+        Text(text = contact.customName, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
     }
     Divider(modifier = Modifier.padding(start = 82.dp))
 }

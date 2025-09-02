@@ -14,8 +14,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
+import com.example.vibechat.data.Contact
 import com.example.vibechat.data.Group
-import com.example.vibechat.data.User
 import com.example.vibechat.repository.GroupRepository
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
@@ -24,8 +24,8 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddGroupMembersScreen(navController: NavController, groupId: String) {
-    var availableContacts by remember { mutableStateOf<List<User>>(emptyList()) }
-    var selectedContacts by remember { mutableStateOf<Set<User>>(emptySet()) }
+    var availableContacts by remember { mutableStateOf<List<Contact>>(emptyList()) }
+    var selectedContacts by remember { mutableStateOf<Set<Contact>>(emptySet()) }
     var isLoading by remember { mutableStateOf(false) }
 
     val auth = FirebaseAuth.getInstance()
@@ -33,7 +33,7 @@ fun AddGroupMembersScreen(navController: NavController, groupId: String) {
     val coroutineScope = rememberCoroutineScope()
     val groupRepository = remember { GroupRepository() }
 
-    // Efeito para buscar os contactos que ainda NÃO estão no grupo
+    // Efeito para buscar os contatos que ainda NÃO estão no grupo
     LaunchedEffect(key1 = groupId) {
         val db = FirebaseFirestore.getInstance()
         val currentUserUid = auth.currentUser?.uid ?: return@LaunchedEffect
@@ -43,18 +43,12 @@ fun AddGroupMembersScreen(navController: NavController, groupId: String) {
             val group = groupDoc.toObject(Group::class.java)
             val currentMemberIds = group?.memberIds ?: emptyList()
 
-            // 2. Pega todos os contactos do utilizador
+            // 2. Pega todos os contatos do usuário
             db.collection("users").document(currentUserUid).collection("contacts").get()
                 .addOnSuccessListener { contactsSnapshot ->
-                    val contactIds = contactsSnapshot.map { it.id }
-                    if (contactIds.isNotEmpty()) {
-                        // 3. Busca os dados dos contactos e filtra os que já são membros
-                        db.collection("users").whereIn("uid", contactIds).get()
-                            .addOnSuccessListener { usersSnapshot ->
-                                availableContacts = usersSnapshot.toObjects(User::class.java)
-                                    .filter { !currentMemberIds.contains(it.uid) }
-                            }
-                    }
+                    // 3. Filtra a lista de contatos para remover quem já é membro
+                    availableContacts = contactsSnapshot.toObjects(Contact::class.java)
+                        .filter { !currentMemberIds.contains(it.uid) }
                 }
         }
     }
@@ -80,7 +74,7 @@ fun AddGroupMembersScreen(navController: NavController, groupId: String) {
                             isLoading = false
                             if (result.isSuccess) {
                                 Toast.makeText(context, "Membros adicionados!", Toast.LENGTH_SHORT).show()
-                                navController.popBackStack() // Volta para a tela de detalhes
+                                navController.popBackStack()
                             } else {
                                 Toast.makeText(context, "Erro: ${result.exceptionOrNull()?.message}", Toast.LENGTH_LONG).show()
                             }
@@ -99,7 +93,7 @@ fun AddGroupMembersScreen(navController: NavController, groupId: String) {
     ) { padding ->
         LazyColumn(modifier = Modifier.padding(padding).padding(top = 16.dp)) {
             items(availableContacts) { contact ->
-                // Reutilizamos o Composable da tela de criação de grupo
+                // Agora estamos passando o tipo correto (Contact) para o Composable
                 ContactSelectionItem(
                     contact = contact,
                     isSelected = selectedContacts.contains(contact),
