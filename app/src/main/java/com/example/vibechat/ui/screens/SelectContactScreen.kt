@@ -32,7 +32,6 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SelectContactScreen(navController: NavController) {
-    // A lista agora é de 'Contact' para ter acesso ao nome personalizado
     var contactList by remember { mutableStateOf<List<Contact>>(emptyList()) }
     val auth = FirebaseAuth.getInstance()
     val userRepository = remember { UserRepository() }
@@ -49,13 +48,11 @@ fun SelectContactScreen(navController: NavController) {
         val db = FirebaseFirestore.getInstance()
         val contactsRef = db.collection("users").document(currentUser.uid).collection("contacts")
 
-        // A busca agora pega diretamente os documentos da sua lista de contatos
         val listener = contactsRef.addSnapshotListener { contactsSnapshot, error ->
             if (error != null || contactsSnapshot == null) {
                 contactList = emptyList()
                 return@addSnapshotListener
             }
-            // Converte os documentos para objetos 'Contact', que contêm o 'customName'
             contactList = contactsSnapshot.toObjects(Contact::class.java)
         }
 
@@ -87,7 +84,6 @@ fun SelectContactScreen(navController: NavController) {
                 ContactItem(
                     contact = contact,
                     onClick = {
-                        // Navega para o chat usando o nome personalizado
                         if (contact.uid.isNotEmpty() && contact.customName.isNotEmpty()) {
                             navController.navigate("chat/${contact.customName}/${contact.uid}?phone=${contact.phoneNumber}") {
                                 popUpTo("home")
@@ -116,11 +112,11 @@ fun SelectContactScreen(navController: NavController) {
                                 if (contact.uid.isNotEmpty()) {
                                     coroutineScope.launch {
                                         val result = userRepository.deleteContact(contact.uid)
-                                        result.onSuccess {
+                                        if (result.isSuccess) {
                                             Toast.makeText(context, "Contato apagado.", Toast.LENGTH_SHORT).show()
-                                        }
-                                        result.onFailure {
-                                            Toast.makeText(context, "Erro ao apagar: ${it.message}", Toast.LENGTH_LONG).show()
+                                        } else {
+                                            val error = result.exceptionOrNull()?.message
+                                            Toast.makeText(context, "Erro ao apagar: $error", Toast.LENGTH_LONG).show()
                                         }
                                         showDeleteDialog = false
                                         contactToDelete = null
@@ -131,7 +127,8 @@ fun SelectContactScreen(navController: NavController) {
                                     contactToDelete = null
                                 }
                             }
-                        }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                     ) {
                         Text("Apagar")
                     }
@@ -164,7 +161,7 @@ fun HeaderOption(icon: ImageVector, text: String, onClick: () -> Unit) {
 @OptIn(ExperimentalGlideComposeApi::class)
 @Composable
 fun ContactItem(
-    contact: Contact, // Agora recebe um objeto 'Contact'
+    contact: Contact,
     onClick: () -> Unit,
     onDeleteClick: () -> Unit
 ) {
@@ -199,7 +196,6 @@ fun ContactItem(
             }
         }
         Spacer(modifier = Modifier.width(16.dp))
-        // Exibe o nome personalizado
         Text(text = contact.customName, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
 
         IconButton(onClick = onDeleteClick) {

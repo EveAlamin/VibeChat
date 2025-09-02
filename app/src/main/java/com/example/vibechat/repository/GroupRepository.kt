@@ -20,7 +20,7 @@ class GroupRepository {
     suspend fun createGroup(
         name: String,
         imageUri: Uri?,
-        members: List<Contact> // <-- A CORREÇÃO ESTÁ AQUI
+        members: List<Contact>
     ): Result<String> {
         return try {
             val currentUserUid = auth.currentUser?.uid
@@ -144,6 +144,44 @@ class GroupRepository {
             }
 
             batch.commit().await()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun leaveGroup(groupId: String): Result<Unit> {
+        return try {
+            val currentUserUid = auth.currentUser?.uid
+                ?: return Result.failure(Exception("Usuário não autenticado."))
+
+            val groupRef = db.collection("groups").document(groupId)
+            val userConversationRef = db.collection("users").document(currentUserUid)
+                .collection("conversations").document(groupId)
+
+            db.runTransaction { transaction ->
+                val groupSnapshot = transaction.get(groupRef)
+                val group = groupSnapshot.toObject(Group::class.java)
+                    ?: throw Exception("Grupo não encontrado.")
+
+                // Se o utilizador for o último membro, apaga o grupo inteiro.
+                if (group.memberIds.size == 1 && group.memberIds.contains(currentUserUid)) {
+                    transaction.delete(groupRef)
+                } else {
+                    // Caso contrário, apenas remove o utilizador das listas.
+                    transaction.update(
+                        groupRef,
+                        "memberIds", FieldValue.arrayRemove(currentUserUid),
+                        "adminIds", FieldValue.arrayRemove(currentUserUid)
+                    )
+                }
+
+                // Apaga sempre a conversa da lista do utilizador.
+                transaction.delete(userConversationRef)
+
+                null // Sucesso da transação
+            }.await()
+
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)

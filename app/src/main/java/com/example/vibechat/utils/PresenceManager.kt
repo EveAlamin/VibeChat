@@ -1,6 +1,5 @@
-package com.example.vibechat.utils // Verifique se o pacote está correto
+package com.example.vibechat.utils
 
-import android.util.Log
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.database.*
 
@@ -12,44 +11,36 @@ object PresenceManager {
     private var database: DatabaseReference? = null
 
     fun initialize() {
-        // Inicialize a referência apenas se houver um usuário logado
-        currentUserUid?.let { uid ->
-            database = FirebaseDatabase.getInstance().getReference("/status/$uid")
+        // Esta função apenas prepara a referência e a nossa "rede de segurança".
+        if (currentUserUid != null && database == null) {
+            database = FirebaseDatabase.getInstance().getReference("/status/$currentUserUid")
 
-            val onlineStatus = mapOf(
-                "isOnline" to true,
-                "lastSeen" to ServerValue.TIMESTAMP
-            )
-
-            val offlineStatus = mapOf(
+            // O onDisconnect é a instrução que o servidor Firebase executará
+            // se a ligação da app cair abruptamente (crash, perda de rede, etc.).
+            database?.onDisconnect()?.setValue(mapOf(
                 "isOnline" to false,
                 "lastSeen" to ServerValue.TIMESTAMP
-            )
-
-            val connectedRef = FirebaseDatabase.getInstance().getReference(".info/connected")
-            connectedRef.addValueEventListener(object : ValueEventListener {
-                override fun onDataChange(snapshot: DataSnapshot) {
-                    val connected = snapshot.getValue(Boolean::class.java) ?: false
-                    if (connected) {
-                        database?.setValue(onlineStatus)
-                        database?.onDisconnect()?.setValue(offlineStatus)
-                    }
-                }
-
-                override fun onCancelled(error: DatabaseError) {
-                    Log.w("PresenceManager", "Listener was cancelled at .info/connected", error.toException())
-                }
-            })
+            ))
         }
     }
 
+    // Chamada explicitamente quando a app entra em primeiro plano.
+    fun goOnline() {
+        currentUserUid?.let {
+            database?.setValue(mapOf(
+                "isOnline" to true,
+                "lastSeen" to ServerValue.TIMESTAMP
+            ))
+        }
+    }
+
+    // Chamada explicitamente quando a app entra em segundo plano.
     fun goOffline() {
-        currentUserUid?.let { uid ->
-            val offlineStatus = mapOf(
+        currentUserUid?.let {
+            database?.setValue(mapOf(
                 "isOnline" to false,
                 "lastSeen" to ServerValue.TIMESTAMP
-            )
-            FirebaseDatabase.getInstance().getReference("/status/$uid").setValue(offlineStatus)
+            ))
         }
     }
 }

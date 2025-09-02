@@ -22,6 +22,9 @@ import com.example.vibechat.ui.screens.*
 import com.example.vibechat.ui.theme.VibeChatTheme
 import com.example.vibechat.utils.PresenceManager
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.ktx.firestore
+import com.google.firebase.firestore.ktx.firestoreSettings
+import com.google.firebase.ktx.Firebase
 
 class MainActivity : ComponentActivity() {
 
@@ -43,7 +46,18 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         askNotificationPermission()
 
-        // Inicializa o gerenciador de presença assim que o app abre
+        // Ativa a persistência do Firestore (a do Realtime Database está na classe VibeChatApp)
+        try {
+            val firestore = Firebase.firestore
+            val settings = firestoreSettings {
+                isPersistenceEnabled = true
+            }
+            firestore.firestoreSettings = settings
+        } catch (e: Exception) {
+            // Ignorar erro se já estiver ativado
+        }
+
+        // A inicialização do PresenceManager é importante para preparar o onDisconnect
         PresenceManager.initialize()
 
         setContent {
@@ -149,7 +163,7 @@ class MainActivity : ComponentActivity() {
                             )
                         ) { backStackEntry ->
                             val name = backStackEntry.arguments?.getString("name") ?: ""
-                            val uid = backStackEntry.arguments?.getString("uid") ?: "" // Este 'uid' da rota agora é o nosso 'chatId'
+                            val uid = backStackEntry.arguments?.getString("uid") ?: ""
                             val phone = backStackEntry.arguments?.getString("phone")
                             val isGroup = backStackEntry.arguments?.getBoolean("isGroup") ?: false
 
@@ -163,7 +177,6 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
-                    // Lógica para lidar com a abertura da app a partir de uma notificação
                     val partnerUid = intent.getStringExtra("partnerUid")
                     val partnerName = intent.getStringExtra("partnerName")
                     val partnerPhone = intent.getStringExtra("partnerPhone")
@@ -171,7 +184,6 @@ class MainActivity : ComponentActivity() {
                     if (partnerUid != null && partnerName != null && partnerPhone != null) {
                         LaunchedEffect(Unit) {
                             navController.navigate("chat/$partnerName/$partnerUid?phone=$partnerPhone")
-                            // Limpa os extras para não navegar novamente em caso de recriação da Activity
                             intent.removeExtra("partnerUid")
                         }
                     }
@@ -180,9 +192,4 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // Define o usuário como offline quando o app é completamente fechado
-    override fun onDestroy() {
-        super.onDestroy()
-        PresenceManager.goOffline()
-    }
 }

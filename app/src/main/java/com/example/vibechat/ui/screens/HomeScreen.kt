@@ -144,8 +144,22 @@ fun ConversationsScreen(navController: NavController, searchQuery: String, selec
     val auth = FirebaseAuth.getInstance()
     val db = FirebaseFirestore.getInstance()
     val currentUserUid = auth.currentUser?.uid
+    var blockedUserIds by remember { mutableStateOf<Set<String>>(emptySet()) }
 
-    // Listener para buscar seus contatos e mapear UID -> Nome Personalizado
+    // Listener para buscar a lista de utilizadores bloqueados
+    LaunchedEffect(currentUserUid) {
+        if (currentUserUid != null) {
+            db.collection("users").document(currentUserUid)
+                .collection("blockedUsers")
+                .addSnapshotListener { snapshot, _ ->
+                    if (snapshot != null) {
+                        blockedUserIds = snapshot.documents.map { it.id }.toSet()
+                    }
+                }
+        }
+    }
+
+    // Listener para buscar os seus contactos e mapear UID -> Nome Personalizado
     LaunchedEffect(currentUserUid) {
         if (currentUserUid != null) {
             db.collection("users").document(currentUserUid).collection("contacts")
@@ -161,7 +175,7 @@ fun ConversationsScreen(navController: NavController, searchQuery: String, selec
         }
     }
 
-    // Listener para buscar suas conversas
+    // Listener para buscar as suas conversas
     LaunchedEffect(currentUserUid) {
         if (currentUserUid != null) {
             db.collection("users").document(currentUserUid).collection("conversations")
@@ -174,23 +188,25 @@ fun ConversationsScreen(navController: NavController, searchQuery: String, selec
         }
     }
 
-    // Combina as duas listas para criar a lista de exibição final
+    // Combina as listas para criar a lista de exibição final
     val displayList by remember(conversationList, contactList) {
         derivedStateOf {
             conversationList.map { conversation ->
                 val customName = contactList[conversation.partnerId]
-                // Se um nome personalizado existir, use-o. Senão, use o nome que está na conversa.
                 conversation.copy(partnerName = customName ?: conversation.partnerName)
             }
         }
     }
 
-    val filteredList by remember(searchQuery, displayList, selectedFilter) {
+    // Aplica o filtro de pesquisa e de categorias
+    val filteredList by remember(searchQuery, displayList, selectedFilter, blockedUserIds) {
         derivedStateOf {
+            val unblockedList = displayList.filter { it.partnerId !in blockedUserIds }
+
             val searchedList = if (searchQuery.isBlank()) {
-                displayList
+                unblockedList
             } else {
-                displayList.filter {
+                unblockedList.filter {
                     it.partnerName.contains(searchQuery, ignoreCase = true)
                 }
             }

@@ -34,14 +34,17 @@ import androidx.compose.ui.window.Dialog
 import androidx.navigation.NavController
 import com.bumptech.glide.integration.compose.ExperimentalGlideComposeApi
 import com.bumptech.glide.integration.compose.GlideImage
-import com.example.vibechat.data.Conversation
-import com.example.vibechat.data.Group
-import com.example.vibechat.data.Message
-import com.example.vibechat.data.User
+import com.example.vibechat.data.*
+import com.example.vibechat.repository.UserRepository
 import com.example.vibechat.ui.theme.BlueCheck
+import com.example.vibechat.utils.formatLastSeen
 import com.example.vibechat.utils.formatTimestamp
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.database.DataSnapshot
+import com.google.firebase.database.DatabaseError
+import com.google.firebase.database.FirebaseDatabase
+import com.google.firebase.database.ValueEventListener
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
@@ -78,6 +81,36 @@ fun ChatScreen(
 
     var locallyDeletedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
 
+    var isPartnerBlocked by remember { mutableStateOf(false) }
+    val userRepository = remember { UserRepository() }
+
+    var partnerPresence by remember { mutableStateOf<UserPresence?>(null) }
+
+    DisposableEffect(chatId) {
+        var presenceListener: ValueEventListener? = null
+        if (!isGroup) {
+            val presenceRef = FirebaseDatabase.getInstance().getReference("/status/$chatId")
+            presenceListener = presenceRef.addValueEventListener(object : ValueEventListener {
+                override fun onDataChange(snapshot: DataSnapshot) {
+                    partnerPresence = snapshot.getValue(UserPresence::class.java)
+                }
+                override fun onCancelled(error: DatabaseError) {}
+            })
+        }
+        onDispose {
+            presenceListener?.let {
+                FirebaseDatabase.getInstance().getReference("/status/$chatId").removeEventListener(it)
+            }
+        }
+    }
+
+
+    LaunchedEffect(chatId) {
+        if (!isGroup) {
+            isPartnerBlocked = userRepository.isContactBlocked(chatId)
+        }
+    }
+
     val mainCollection = if (isGroup) "groups" else "chats"
     val chatDocumentId = if (isGroup) chatId else getChatRoomId(senderUid, chatId)
     val chatDocRef = db.collection(mainCollection).document(chatDocumentId)
@@ -106,7 +139,6 @@ fun ChatScreen(
         }
     }
 
-    // Efeito para marcar mensagens como lidas
     LaunchedEffect(visibleMessages, listState) {
         val unreadMessages = visibleMessages
             .filter { it.senderId != senderUid && !it.readBy.contains(senderUid) }
@@ -248,6 +280,7 @@ fun ChatScreen(
                 isGroup = isGroup,
                 chatPartner = chatPartner,
                 name = name,
+                presence = partnerPresence,
                 onBackClick = { navController.popBackStack() },
                 onDetailsClick = {
                     if (isGroup) {
@@ -265,9 +298,14 @@ fun ChatScreen(
         content = { padding ->
             Column(modifier = Modifier.fillMaxSize().padding(padding).background(Color(0xFFECE5DD))) {
                 AnimatedVisibility(visible = pinnedMessage != null, enter = fadeIn(), exit = fadeOut()) {
+                    val pinnedMessageSenderName = when {
+                        pinnedMessage?.senderId == senderUid -> "Eu"
+                        isGroup -> membersNames[pinnedMessage?.senderId] ?: "Alguém"
+                        else -> name
+                    }
                     PinnedMessageBar(
                         message = pinnedMessage,
-                        senderName = membersNames[pinnedMessage?.senderId] ?: "Eu",
+                        senderName = pinnedMessageSenderName,
                         onUnpin = { updatePinnedMessage(null) }
                     )
                 }
@@ -280,6 +318,7 @@ fun ChatScreen(
                     items(filteredMessages.reversed()) { message ->
                         var showMessageMenu by remember { mutableStateOf(false) }
                         val senderName = if (isGroup && message.senderId != senderUid) membersNames[message.senderId] else null
+                        val memberCount = (chatPartner as? Group)?.memberIds?.size ?: 0
 
                         Box {
                             val messageBubble: @Composable () -> Unit = {
@@ -288,7 +327,8 @@ fun ChatScreen(
                                         message = message,
                                         searchQuery = searchQuery,
                                         isGroup = isGroup,
-                                        partnerId = chatId
+                                        partnerId = chatId,
+                                        memberCount = memberCount
                                     )
                                 } else {
                                     ReceivedMessageBubble(message = message, senderName = senderName, searchQuery = searchQuery)
@@ -345,48 +385,64 @@ fun ChatScreen(
                     )
                 }
 
-                Row(modifier = Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    TextField(
-                        value = messageText,
-                        onValueChange = { messageText = it },
-                        modifier = Modifier.weight(1f),
-                        placeholder = { Text("Digite uma mensagem...") },
-                        shape = RoundedCornerShape(24.dp),
-                        colors = TextFieldDefaults.colors(
-                            focusedIndicatorColor = Color.Transparent,
-                            unfocusedIndicatorColor = Color.Transparent
-                        )
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    FloatingActionButton(
-                        onClick = {
-                            if (messageText.isNotBlank() && currentUser != null) {
-                                val currentMessage = messageText
-                                val messageId = db.collection("chats").document().id
-                                val messageObject = Message(
-                                    id = messageId,
-                                    message = currentMessage,
-                                    senderId = senderUid,
-                                    timestamp = Timestamp.now(),
-                                    readBy = listOf(senderUid) // Adiciona o remetente à lista de lidos
-                                )
-
-                                coroutineScope.launch {
-                                    chatDocRef.collection("messages").document(messageId).set(messageObject)
-                                    if (!isGroup) {
-                                        val receiverRoomId = getChatRoomId(chatId, senderUid)
-                                        db.collection("chats").document(receiverRoomId)
-                                            .collection("messages").document(messageId).set(messageObject)
-                                    }
-                                    updateLastMessage(db, chatId, currentMessage, isGroup, currentUser)
-                                }
-                                messageText = ""
-                            }
-                        },
-                        shape = CircleShape,
-                        containerColor = MaterialTheme.colorScheme.primary
+                if (isPartnerBlocked && !isGroup) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color(0xFFFFF9C4))
+                            .padding(16.dp),
+                        horizontalArrangement = Arrangement.Center
                     ) {
-                        Icon(Icons.Default.Send, contentDescription = "Enviar", tint = Color.White)
+                        Text(
+                            "Você bloqueou este contato.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color.Black
+                        )
+                    }
+                } else {
+                    Row(modifier = Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        TextField(
+                            value = messageText,
+                            onValueChange = { messageText = it },
+                            modifier = Modifier.weight(1f),
+                            placeholder = { Text("Digite uma mensagem...") },
+                            shape = RoundedCornerShape(24.dp),
+                            colors = TextFieldDefaults.colors(
+                                focusedIndicatorColor = Color.Transparent,
+                                unfocusedIndicatorColor = Color.Transparent
+                            )
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        FloatingActionButton(
+                            onClick = {
+                                if (messageText.isNotBlank() && currentUser != null) {
+                                    val currentMessage = messageText
+                                    val messageId = db.collection("chats").document().id
+                                    val messageObject = Message(
+                                        id = messageId,
+                                        message = currentMessage,
+                                        senderId = senderUid,
+                                        timestamp = Timestamp.now(),
+                                        readBy = listOf(senderUid)
+                                    )
+
+                                    coroutineScope.launch {
+                                        chatDocRef.collection("messages").document(messageId).set(messageObject)
+                                        if (!isGroup) {
+                                            val receiverRoomId = getChatRoomId(chatId, senderUid)
+                                            db.collection("chats").document(receiverRoomId)
+                                                .collection("messages").document(messageId).set(messageObject)
+                                        }
+                                        updateLastMessage(db, chatId, currentMessage, isGroup, currentUser)
+                                    }
+                                    messageText = ""
+                                }
+                            },
+                            shape = CircleShape,
+                            containerColor = MaterialTheme.colorScheme.primary
+                        ) {
+                            Icon(Icons.Default.Send, contentDescription = "Enviar", tint = Color.White)
+                        }
                     }
                 }
             }
@@ -489,6 +545,7 @@ private fun CustomChatTopBar(
     isGroup: Boolean,
     chatPartner: Any?,
     name: String,
+    presence: UserPresence?,
     onBackClick: () -> Unit,
     onDetailsClick: () -> Unit,
     isSearchActive: Boolean,
@@ -546,7 +603,7 @@ private fun CustomChatTopBar(
                     modifier = Modifier
                         .weight(1f)
                         .padding(horizontal = 12.dp)
-                        .clickable(enabled = !isGroup) {
+                        .clickable {
                             onDetailsClick()
                         },
                     verticalAlignment = Alignment.CenterVertically
@@ -589,6 +646,20 @@ private fun CustomChatTopBar(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
+                        if (!isGroup && presence != null) {
+                            val statusText = if (presence.isOnline) {
+                                "Online"
+                            } else {
+                                formatLastSeen(presence.lastSeen)
+                            }
+                            Text(
+                                text = statusText,
+                                color = Color.White.copy(alpha = 0.8f),
+                                fontSize = 12.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
                 }
                 IconButton(onClick = onSearchClick) {
@@ -747,7 +818,13 @@ fun ReceivedMessageBubble(message: Message, senderName: String?, searchQuery: St
 }
 
 @Composable
-fun SentMessageBubble(message: Message, searchQuery: String, isGroup: Boolean, partnerId: String) {
+fun SentMessageBubble(
+    message: Message,
+    searchQuery: String,
+    isGroup: Boolean,
+    partnerId: String,
+    memberCount: Int
+) {
     val configuration = LocalConfiguration.current
     val screenWidth = configuration.screenWidthDp.dp
 
@@ -793,7 +870,12 @@ fun SentMessageBubble(message: Message, searchQuery: String, isGroup: Boolean, p
                         color = Color.Gray
                     )
                     Spacer(modifier = Modifier.width(4.dp))
-                    MessageStatusIcon(message = message, isGroup = isGroup, partnerId = partnerId)
+                    MessageStatusIcon(
+                        message = message,
+                        isGroup = isGroup,
+                        partnerId = partnerId,
+                        memberCount = memberCount
+                    )
                 }
             }
         }
@@ -801,19 +883,20 @@ fun SentMessageBubble(message: Message, searchQuery: String, isGroup: Boolean, p
 }
 
 @Composable
-fun MessageStatusIcon(message: Message, isGroup: Boolean, partnerId: String) {
+fun MessageStatusIcon(
+    message: Message,
+    isGroup: Boolean,
+    partnerId: String,
+    memberCount: Int
+) {
     val isRead = if (isGroup) {
-        // Em um grupo, consideramos "lido" se mais alguém além do remetente leu.
-        message.readBy.size > 1
+        message.readBy.size >= memberCount && memberCount > 0
     } else {
-        // Em um chat individual, se o parceiro leu.
         message.readBy.contains(partnerId)
     }
 
     val (icon, color) = when {
         isRead -> Icons.Default.DoneAll to BlueCheck
-        // Aqui você poderia adicionar uma lógica para "DELIVERED" se quisesse,
-        // mas por enquanto, mantemos simples.
         else -> Icons.Default.Done to Color.Gray
     }
     Icon(

@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import com.bumptech.glide.integration.compose.ExperimentalGlideComposeApi
 import com.bumptech.glide.integration.compose.GlideImage
+import com.example.vibechat.data.Contact
 import com.example.vibechat.data.Group
 import com.example.vibechat.data.User
 import com.example.vibechat.repository.GroupRepository
@@ -36,21 +37,32 @@ import kotlinx.coroutines.launch
 fun GroupDetailsScreen(navController: NavController, groupId: String) {
     var group by remember { mutableStateOf<Group?>(null) }
     var members by remember { mutableStateOf<List<User>>(emptyList()) }
+    var contactNames by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     val currentUserUid = FirebaseAuth.getInstance().currentUser?.uid
     val coroutineScope = rememberCoroutineScope()
     val groupRepository = remember { GroupRepository() }
     val context = LocalContext.current
 
-    // Estados para o diálogo de renomear
     var showRenameDialog by remember { mutableStateOf(false) }
     var newGroupName by remember { mutableStateOf("") }
 
-    // Estados para o diálogo de confirmação de remoção
     var showRemoveDialog by remember { mutableStateOf(false) }
     var memberToRemove by remember { mutableStateOf<User?>(null) }
 
+    // *** NOVO ESTADO PARA O DIÁLOGO DE SAIR DO GRUPO ***
+    var showLeaveGroupDialog by remember { mutableStateOf(false) }
+
     DisposableEffect(groupId) {
         val db = FirebaseFirestore.getInstance()
+        val contactsListener = db.collection("users").document(currentUserUid!!)
+            .collection("contacts")
+            .addSnapshotListener { snapshot, _ ->
+                if (snapshot != null) {
+                    contactNames = snapshot.toObjects(Contact::class.java)
+                        .associateBy({ it.uid }, { it.customName })
+                }
+            }
+
         val groupListener = db.collection("groups").document(groupId)
             .addSnapshotListener { groupSnapshot, _ ->
                 val groupData = groupSnapshot?.toObject(Group::class.java)
@@ -67,7 +79,10 @@ fun GroupDetailsScreen(navController: NavController, groupId: String) {
                     }
                 }
             }
-        onDispose { groupListener.remove() }
+        onDispose {
+            groupListener.remove()
+            contactsListener.remove()
+        }
     }
 
     val isCurrentUserAdmin = group?.adminIds?.contains(currentUserUid) == true
@@ -97,7 +112,6 @@ fun GroupDetailsScreen(navController: NavController, groupId: String) {
                             .background(MaterialTheme.colorScheme.secondaryContainer),
                         contentAlignment = Alignment.Center
                     ) {
-                        // ... (código da imagem do grupo sem alterações)
                         if (group?.groupPictureUrl != null) {
                             GlideImage(
                                 model = group?.groupPictureUrl,
@@ -116,7 +130,6 @@ fun GroupDetailsScreen(navController: NavController, groupId: String) {
                     }
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // --- ÁREA DO NOME MODIFICADA ---
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.Center,
@@ -127,7 +140,6 @@ fun GroupDetailsScreen(navController: NavController, groupId: String) {
                             fontSize = 24.sp,
                             fontWeight = FontWeight.Bold
                         )
-                        // Mostra o ícone de edição apenas para administradores
                         if (isCurrentUserAdmin) {
                             IconButton(onClick = {
                                 newGroupName = group?.name ?: ""
@@ -141,7 +153,6 @@ fun GroupDetailsScreen(navController: NavController, groupId: String) {
                 Divider()
             }
 
-            // ... (resto do LazyColumn com participantes e ActionItem sem alterações)
             item {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
@@ -158,9 +169,13 @@ fun GroupDetailsScreen(navController: NavController, groupId: String) {
                     }
                 }
             }
+
             items(members) { member ->
+                val memberName = contactNames[member.uid] ?: member.name
                 MemberItem(
-                    member = member,
+                    memberName = memberName ?: "Utilizador",
+                    memberStatus = member.status ?: "",
+                    memberPictureUrl = member.profilePictureUrl,
                     isAdmin = group?.adminIds?.contains(member.uid) == true,
                     showAdminOptions = isCurrentUserAdmin && member.uid != currentUserUid,
                     onRemoveClick = {
@@ -169,22 +184,42 @@ fun GroupDetailsScreen(navController: NavController, groupId: String) {
                     }
                 )
             }
+
+            // *** NOVO BOTÃO DE SAIR DO GRUPO ***
+            item {
+                Spacer(modifier = Modifier.height(16.dp))
+                Divider()
+                TextButton(
+                    onClick = { showLeaveGroupDialog = true },
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ExitToApp,
+                        contentDescription = "Sair do Grupo",
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(end = 16.dp)
+                    )
+                    Text("Sair do Grupo", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.weight(1f)) // Empurra o texto para a esquerda
+                }
+                Divider()
+            }
         }
     }
 
-    // Diálogo de confirmação para remover membro
     if (showRemoveDialog) {
+        val memberName = contactNames[memberToRemove?.uid] ?: memberToRemove?.name
         AlertDialog(
             onDismissRequest = { showRemoveDialog = false },
             title = { Text("Remover Participante") },
-            text = { Text("Tem a certeza de que quer remover ${memberToRemove?.name} do grupo?") },
+            text = { Text("Tem a certeza de que quer remover ${memberName} do grupo?") },
             confirmButton = {
                 Button(
                     onClick = {
                         coroutineScope.launch {
                             val result = groupRepository.removeMemberFromGroup(groupId, memberToRemove!!.uid!!)
                             if (result.isSuccess) {
-                                Toast.makeText(context, "${memberToRemove?.name} removido.", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "${memberName} removido.", Toast.LENGTH_SHORT).show()
                             } else {
                                 Toast.makeText(context, "Erro ao remover.", Toast.LENGTH_SHORT).show()
                             }
@@ -205,7 +240,6 @@ fun GroupDetailsScreen(navController: NavController, groupId: String) {
         )
     }
 
-    // --- NOVO DIÁLOGO PARA RENOMEAR O GRUPO ---
     if (showRenameDialog) {
         AlertDialog(
             onDismissRequest = { showRenameDialog = false },
@@ -219,19 +253,17 @@ fun GroupDetailsScreen(navController: NavController, groupId: String) {
                 )
             },
             confirmButton = {
-                Button(
-                    onClick = {
-                        coroutineScope.launch {
-                            val result = groupRepository.renameGroup(groupId, newGroupName)
-                            if (result.isSuccess) {
-                                Toast.makeText(context, "Grupo renomeado.", Toast.LENGTH_SHORT).show()
-                            } else {
-                                Toast.makeText(context, "Erro: ${result.exceptionOrNull()?.message}", Toast.LENGTH_LONG).show()
-                            }
-                            showRenameDialog = false
+                Button(onClick = {
+                    coroutineScope.launch {
+                        val result = groupRepository.renameGroup(groupId, newGroupName)
+                        if (result.isSuccess) {
+                            Toast.makeText(context, "Grupo renomeado.", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(context, "Erro: ${result.exceptionOrNull()?.message}", Toast.LENGTH_LONG).show()
                         }
+                        showRenameDialog = false
                     }
-                ) {
+                }) {
                     Text("Guardar")
                 }
             },
@@ -242,13 +274,50 @@ fun GroupDetailsScreen(navController: NavController, groupId: String) {
             }
         )
     }
+
+    // *** NOVO DIÁLOGO DE CONFIRMAÇÃO PARA SAIR DO GRUPO ***
+    if (showLeaveGroupDialog) {
+        AlertDialog(
+            onDismissRequest = { showLeaveGroupDialog = false },
+            title = { Text("Sair do Grupo") },
+            text = { Text("Tem a certeza de que quer sair do grupo '${group?.name}'?") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        coroutineScope.launch {
+                            val result = groupRepository.leaveGroup(groupId)
+                            if (result.isSuccess) {
+                                Toast.makeText(context, "Você saiu do grupo.", Toast.LENGTH_SHORT).show()
+                                navController.navigate("home") {
+                                    popUpTo("home") { inclusive = true }
+                                }
+                            } else {
+                                Toast.makeText(context, "Erro ao sair do grupo.", Toast.LENGTH_SHORT).show()
+                            }
+                            showLeaveGroupDialog = false
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Sair")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLeaveGroupDialog = false }) {
+                    Text("Cancelar")
+                }
+            }
+        )
+    }
 }
 
-// ... (Composables MemberItem e ActionItem permanecem os mesmos)
+
 @OptIn(ExperimentalGlideComposeApi::class)
 @Composable
 fun MemberItem(
-    member: User,
+    memberName: String,
+    memberStatus: String,
+    memberPictureUrl: String?,
     isAdmin: Boolean,
     showAdminOptions: Boolean,
     onRemoveClick: () -> Unit
@@ -260,7 +329,7 @@ fun MemberItem(
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        if (member.profilePictureUrl.isNullOrEmpty()) {
+        if (memberPictureUrl.isNullOrEmpty()) {
             Icon(
                 imageVector = Icons.Default.Person,
                 contentDescription = "Sem foto",
@@ -272,8 +341,8 @@ fun MemberItem(
             )
         } else {
             GlideImage(
-                model = member.profilePictureUrl,
-                contentDescription = "Foto de ${member.name}",
+                model = memberPictureUrl,
+                contentDescription = "Foto de $memberName",
                 modifier = Modifier
                     .size(50.dp)
                     .clip(CircleShape),
@@ -282,8 +351,8 @@ fun MemberItem(
         }
         Spacer(modifier = Modifier.width(16.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Text(member.name ?: "Usuário", style = MaterialTheme.typography.bodyLarge)
-            Text(member.status ?: "", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+            Text(memberName, style = MaterialTheme.typography.bodyLarge)
+            Text(memberStatus, style = MaterialTheme.typography.bodySmall, color = Color.Gray)
         }
         if (isAdmin) {
             Text(
