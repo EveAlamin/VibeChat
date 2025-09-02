@@ -1,6 +1,7 @@
 package com.example.vibechat.repository
 
 import android.net.Uri
+import com.example.vibechat.data.Contact
 import com.example.vibechat.data.Conversation
 import com.example.vibechat.data.Group
 import com.example.vibechat.data.User
@@ -16,15 +17,14 @@ class GroupRepository {
     private val auth = FirebaseAuth.getInstance()
     private val storage = FirebaseStorage.getInstance()
 
-    // ... (a função createGroup não precisa de alterações)
     suspend fun createGroup(
         name: String,
         imageUri: Uri?,
-        members: List<User>
+        members: List<Contact> // <-- A CORREÇÃO ESTÁ AQUI
     ): Result<String> {
         return try {
             val currentUserUid = auth.currentUser?.uid
-                ?: return Result.failure(Exception("Utilizador não autenticado."))
+                ?: return Result.failure(Exception("Usuário não autenticado."))
 
             var groupPictureUrl: String? = null
             if (imageUri != null) {
@@ -34,6 +34,7 @@ class GroupRepository {
             }
 
             val memberIds = (members.mapNotNull { it.uid } + currentUserUid).distinct()
+
             val newGroup = Group(
                 name = name,
                 groupPictureUrl = groupPictureUrl,
@@ -89,10 +90,9 @@ class GroupRepository {
         }
     }
 
-    suspend fun addMembersToGroup(groupId: String, newMembers: List<User>): Result<Unit> {
+    suspend fun addMembersToGroup(groupId: String, newMembers: List<Contact>): Result<Unit> {
         return try {
             val groupRef = db.collection("groups").document(groupId)
-            // --- CORREÇÃO APLICADA AQUI ---
             val group = groupRef.get().await().toObject(Group::class.java)
                 ?: return Result.failure(Exception("Grupo não encontrado."))
 
@@ -124,7 +124,6 @@ class GroupRepository {
 
     suspend fun renameGroup(groupId: String, newName: String): Result<Unit> {
         return try {
-            // Validação básica para não permitir nomes vazios
             if (newName.isBlank()) {
                 return Result.failure(Exception("O nome não pode estar vazio."))
             }
@@ -136,10 +135,8 @@ class GroupRepository {
             val memberIds = group.memberIds
             val batch = db.batch()
 
-            // 1. Atualiza o nome no documento principal do grupo
             batch.update(groupRef, "name", newName)
 
-            // 2. Atualiza o nome na lista de conversas de cada membro
             memberIds.forEach { memberId ->
                 val conversationRef = db.collection("users").document(memberId)
                     .collection("conversations").document(groupId)
