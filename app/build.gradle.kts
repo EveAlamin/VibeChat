@@ -3,6 +3,7 @@ plugins {
     id("org.jetbrains.kotlin.android")
     id("com.google.gms.google-services")
     id("org.jetbrains.kotlin.plugin.compose") // Plugin necessário para o Kotlin 2.0+
+    id("org.jetbrains.kotlin.kapt")
 }
 
 android {
@@ -46,7 +47,8 @@ android {
 }
 
 dependencies {
-    // Dependências padrão e Compose
+    kapt("com.github.bumptech.glide:compiler:4.16.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.1")    // Dependências padrão e Compose
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.2")
     implementation("androidx.activity:activity-compose:1.9.0")
@@ -84,6 +86,16 @@ dependencies {
 
     // Glide para carregar imagens em Compose
     implementation("com.github.bumptech.glide:compose:1.0.0-beta01")
+
+    // ** NOVO: Dependência do Gson para o TypeConverter **
+    implementation("com.google.code.gson:gson:2.10.1")
+
+    // ** NOVO: Dependências do Room **
+    val room_version = "2.6.1"
+    implementation("androidx.room:room-runtime:$room_version")
+    kapt("androidx.room:room-compiler:$room_version")
+    implementation("androidx.room:room-ktx:$room_version") // Suporte a coroutines
+
 
     // Testes
     testImplementation("junit:junit:4.13.2")

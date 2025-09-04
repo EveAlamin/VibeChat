@@ -6,5 +6,7 @@ data class User(
     val phoneNumber: String? = null,
     val email: String? = null,
     val profilePictureUrl: String? = null,
-    val status: String? = "Disponível"
+    val status: String? = "Disponível",
+    // NOVO: Adiciona o campo para o token de notificação FCM
+    val fcmToken: String? = null
 )

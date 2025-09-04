@@ -1,16 +1,21 @@
 package com.example.vibechat.repository
 
 import android.net.Uri
+import com.example.vibechat.VibeChatApp
 import com.example.vibechat.data.Contact
 import com.example.vibechat.data.Conversation
 import com.example.vibechat.data.Group
-import com.example.vibechat.data.User
+import com.example.vibechat.data.local.entities.toConversationEntity
+import com.example.vibechat.data.local.entities.toGroupEntity
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.storage.FirebaseStorage
 import kotlinx.coroutines.tasks.await
 import java.util.*
+import com.example.vibechat.data.local.entities.toContactEntity
+import com.example.vibechat.data.local.entities.toUserEntity
+import kotlinx.coroutines.flow.first
 
 class GroupRepository {
     private val db = FirebaseFirestore.getInstance()
@@ -57,6 +62,8 @@ class GroupRepository {
                 isGroup = true
             )
 
+            // MODIFICADO: Salva o grupo e as conversas no Room
+            VibeChatApp.database.groupDao().insertGroup(newGroup.toGroupEntity().copy(id = groupId))
             val batch = db.batch()
             memberIds.forEach { memberId ->
                 val memberConversationRef = db.collection("users")
@@ -64,6 +71,12 @@ class GroupRepository {
                 batch.set(memberConversationRef, conversationForGroup)
             }
             batch.commit().await()
+
+            // MODIFICADO: Salva a conversa para cada membro no Room
+            memberIds.forEach { memberId ->
+                VibeChatApp.database.conversationDao().insertConversation(conversationForGroup.toConversationEntity())
+            }
+
 
             Result.success(groupId)
 
@@ -77,6 +90,16 @@ class GroupRepository {
             val groupRef = db.collection("groups").document(groupId)
             val memberConversationRef = db.collection("users").document(memberUidToRemove)
                 .collection("conversations").document(groupId)
+
+            // MODIFICADO: Remove do Room primeiro
+            val group = VibeChatApp.database.groupDao().getGroupById(groupId).first()
+            group?.let {
+                val updatedMemberIds = it.memberIds.filter { id -> id != memberUidToRemove }
+                val updatedAdminIds = it.adminIds.filter { id -> id != memberUidToRemove }
+                val updatedGroup = it.copy(memberIds = updatedMemberIds, adminIds = updatedAdminIds)
+                VibeChatApp.database.groupDao().insertGroup(updatedGroup)
+            }
+            VibeChatApp.database.conversationDao().deleteConversationByPartnerId(groupId)
 
             db.runTransaction { transaction ->
                 transaction.update(groupRef, "memberIds", FieldValue.arrayRemove(memberUidToRemove))
@@ -107,6 +130,14 @@ class GroupRepository {
                 isGroup = true
             )
 
+            // MODIFICADO: Adiciona os membros no Room e no Firebase
+            val currentGroup = VibeChatApp.database.groupDao().getGroupById(groupId).first()
+            currentGroup?.let {
+                val updatedMemberIds = it.memberIds + newMemberIds
+                val updatedGroup = it.copy(memberIds = updatedMemberIds)
+                VibeChatApp.database.groupDao().insertGroup(updatedGroup)
+            }
+
             val batch = db.batch()
             batch.update(groupRef, "memberIds", FieldValue.arrayUnion(*newMemberIds.toTypedArray()))
             newMemberIds.forEach { memberId ->
@@ -116,6 +147,7 @@ class GroupRepository {
             }
 
             batch.commit().await()
+
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
@@ -136,6 +168,13 @@ class GroupRepository {
             val batch = db.batch()
 
             batch.update(groupRef, "name", newName)
+
+            // MODIFICADO: Atualiza o nome do grupo no Room
+            val currentGroup = VibeChatApp.database.groupDao().getGroupById(groupId).first()
+            currentGroup?.let {
+                val updatedGroup = it.copy(name = newName)
+                VibeChatApp.database.groupDao().insertGroup(updatedGroup)
+            }
 
             memberIds.forEach { memberId ->
                 val conversationRef = db.collection("users").document(memberId)
@@ -159,13 +198,27 @@ class GroupRepository {
             val userConversationRef = db.collection("users").document(currentUserUid)
                 .collection("conversations").document(groupId)
 
+            // MODIFICADO: Apaga a conversa do Room antes da transação
+            VibeChatApp.database.conversationDao().deleteConversationByPartnerId(groupId)
+
+            val group = VibeChatApp.database.groupDao().getGroupById(groupId).first()
+            if (group != null && group.memberIds.size <= 1) {
+                VibeChatApp.database.groupDao().deleteGroupById(groupId)
+            } else {
+                val updatedMemberIds = group?.memberIds?.filter { id -> id != currentUserUid } ?: emptyList()
+                val updatedAdminIds = group?.adminIds?.filter { id -> id != currentUserUid } ?: emptyList()
+                val updatedGroup = group?.copy(memberIds = updatedMemberIds, adminIds = updatedAdminIds)
+                updatedGroup?.let { VibeChatApp.database.groupDao().insertGroup(it) }
+            }
+
+
             db.runTransaction { transaction ->
                 val groupSnapshot = transaction.get(groupRef)
-                val group = groupSnapshot.toObject(Group::class.java)
+                val groupData = groupSnapshot.toObject(Group::class.java)
                     ?: throw Exception("Grupo não encontrado.")
 
                 // Se o utilizador for o último membro, apaga o grupo inteiro.
-                if (group.memberIds.size == 1 && group.memberIds.contains(currentUserUid)) {
+                if (groupData.memberIds.size == 1 && groupData.memberIds.contains(currentUserUid)) {
                     transaction.delete(groupRef)
                 } else {
                     // Caso contrário, apenas remove o utilizador das listas.

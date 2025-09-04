@@ -30,10 +30,21 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.launch
 
+// NOVAS IMPORTAÇÕES NECESSÁRIAS PARA O ROOM
+import com.example.vibechat.VibeChatApp
+import com.example.vibechat.data.local.entities.toDataUser
+import com.example.vibechat.data.local.entities.toUserEntity
+import com.example.vibechat.data.local.entities.toDataGroup
+import com.example.vibechat.data.local.entities.toGroupEntity
+
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalGlideComposeApi::class)
 @Composable
 fun ContactProfileScreen(navController: NavController, userId: String) {
-    var user by remember { mutableStateOf<User?>(null) }
+    // MODIFICADO: Lendo o utilizador a partir do Room
+    val userEntity by VibeChatApp.database.userDao().getUserById(userId).collectAsState(initial = null)
+    val user = userEntity?.let { it.toDataUser() }
+
     var commonGroups by remember { mutableStateOf<List<Group>>(emptyList()) }
     val db = FirebaseFirestore.getInstance()
     val currentUserUid = FirebaseAuth.getInstance().currentUser?.uid
@@ -45,30 +56,51 @@ fun ContactProfileScreen(navController: NavController, userId: String) {
     var isBlocked by remember { mutableStateOf(false) }
     var isLoadingBlockAction by remember { mutableStateOf(true) }
 
-    // Busca os dados do utilizador E o status de bloqueio
-    LaunchedEffect(userId) {
-        if (userId.isNotEmpty()) {
-            db.collection("users").document(userId).addSnapshotListener { snapshot, _ ->
-                user = snapshot?.toObject(User::class.java)
-            }
+    // ... código anterior ...
+
+    // MODIFICADO: Substitui o LaunchedEffect por um DisposableEffect para gerir os listeners corretamente
+    DisposableEffect(userId, currentUserUid) {
+        val db = FirebaseFirestore.getInstance()
+        var userListener: com.google.firebase.firestore.ListenerRegistration? = null
+        var groupsListener: com.google.firebase.firestore.ListenerRegistration? = null
+
+        if (userId.isNotEmpty() && currentUserUid != null) {
+            // Listener para o utilizador
+            userListener = db.collection("users").document(userId)
+                .addSnapshotListener { snapshot, _ ->
+                    val userData = snapshot?.toObject(User::class.java)
+                    userData?.let {
+                        coroutineScope.launch {
+                            VibeChatApp.database.userDao().insertUser(it.toUserEntity())
+                        }
+                    }
+                }
+
             // Verifica o status de bloqueio inicial
-            isBlocked = userRepository.isContactBlocked(userId)
-            isLoadingBlockAction = false
+            coroutineScope.launch {
+                isBlocked = userRepository.isContactBlocked(userId)
+                isLoadingBlockAction = false
+            }
+
+            // Listener para buscar e sincronizar os grupos em comum
+            groupsListener = db.collection("groups")
+                .whereArrayContains("memberIds", currentUserUid)
+                .addSnapshotListener { querySnapshot, _ ->
+                    val allMyGroups = querySnapshot?.toObjects(Group::class.java) ?: emptyList()
+                    commonGroups = allMyGroups.filter { it.memberIds.contains(userId) }
+                    coroutineScope.launch {
+                        VibeChatApp.database.groupDao().insertAllGroups(commonGroups.map { it.toGroupEntity() })
+                    }
+                }
+        }
+
+        onDispose {
+            // Remove os listeners quando a tela é fechada para evitar memory leaks
+            userListener?.remove()
+            groupsListener?.remove()
         }
     }
 
-    // Busca os grupos em comum
-    LaunchedEffect(userId, currentUserUid) {
-        if (userId.isNotEmpty() && currentUserUid != null) {
-            db.collection("groups")
-                .whereArrayContains("memberIds", currentUserUid)
-                .get()
-                .addOnSuccessListener { querySnapshot ->
-                    val allMyGroups = querySnapshot.toObjects(Group::class.java)
-                    commonGroups = allMyGroups.filter { it.memberIds.contains(userId) }
-                }
-        }
-    }
 
     Scaffold(
         topBar = {
@@ -94,7 +126,6 @@ fun ContactProfileScreen(navController: NavController, userId: String) {
             } else {
                 LazyColumn(modifier = Modifier.weight(1f)) {
                     item {
-                        // Secção de informações do perfil
                         Column {
                             Spacer(modifier = Modifier.height(24.dp))
                             Box(
@@ -146,7 +177,6 @@ fun ContactProfileScreen(navController: NavController, userId: String) {
                         }
                     }
 
-                    // Secção de Grupos em Comum
                     if (commonGroups.isNotEmpty()) {
                         item {
                             Divider()
@@ -165,7 +195,6 @@ fun ContactProfileScreen(navController: NavController, userId: String) {
                     }
                 }
 
-                // Botão de Bloqueio
                 Divider()
                 TextButton(
                     onClick = {
@@ -177,7 +206,7 @@ fun ContactProfileScreen(navController: NavController, userId: String) {
                                 userRepository.blockContact(userId)
                             }
                             result.onSuccess {
-                                isBlocked = !isBlocked // Atualiza o estado local
+                                isBlocked = !isBlocked
                                 val feedback = if (isBlocked) "Contato bloqueado" else "Contato desbloqueado"
                                 Toast.makeText(context, feedback, Toast.LENGTH_SHORT).show()
                             }
@@ -204,7 +233,7 @@ fun ContactProfileScreen(navController: NavController, userId: String) {
         }
     }
 }
-
+// As outras funções (ReadOnlyProfileInfoRow, GroupInCommonItem) permanecem as mesmas
 @Composable
 fun ReadOnlyProfileInfoRow(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, subtitle: String) {
     Row(

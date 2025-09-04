@@ -29,10 +29,17 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.launch
 
+// NOVAS IMPORTAÇÕES NECESSÁRIAS
+import com.example.vibechat.VibeChatApp
+import com.example.vibechat.data.local.entities.toDataContact
+import com.example.vibechat.data.local.entities.toContactEntity
+
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SelectContactScreen(navController: NavController) {
-    var contactList by remember { mutableStateOf<List<Contact>>(emptyList()) }
+    // MODIFICAÇÃO: A lista de contatos agora é lida do Room como um Flow
+    val contactList by VibeChatApp.database.contactDao().getAllContacts().collectAsState(initial = emptyList())
     val auth = FirebaseAuth.getInstance()
     val userRepository = remember { UserRepository() }
     val coroutineScope = rememberCoroutineScope()
@@ -41,6 +48,7 @@ fun SelectContactScreen(navController: NavController) {
     var showDeleteDialog by remember { mutableStateOf(false) }
     var contactToDelete by remember { mutableStateOf<Contact?>(null) }
 
+    // MODIFICAÇÃO: O DisposableEffect agora sincroniza dados do Firebase para o Room
     DisposableEffect(auth.currentUser?.uid) {
         val currentUser = auth.currentUser
         if (currentUser == null) return@DisposableEffect onDispose {}
@@ -50,10 +58,14 @@ fun SelectContactScreen(navController: NavController) {
 
         val listener = contactsRef.addSnapshotListener { contactsSnapshot, error ->
             if (error != null || contactsSnapshot == null) {
-                contactList = emptyList()
+                // Se houver um erro, não limpa a lista local para permitir o uso offline
                 return@addSnapshotListener
             }
-            contactList = contactsSnapshot.toObjects(Contact::class.java)
+            val contacts = contactsSnapshot.toObjects(Contact::class.java)
+            coroutineScope.launch {
+                // Sincroniza os contatos do Firebase com o Room
+                VibeChatApp.database.contactDao().insertAllContacts(contacts.map { it.toContactEntity() })
+            }
         }
 
         onDispose {
@@ -80,7 +92,9 @@ fun SelectContactScreen(navController: NavController) {
                 HeaderOption(icon = Icons.Filled.PersonAdd, text = "Novo contato", onClick = { navController.navigate("addContact") })
             }
 
-            items(contactList) { contact ->
+            // MODIFICAÇÃO: Itera sobre a lista de entidades do Room e a mapeia para a classe original
+            items(contactList) { contactEntity ->
+                val contact = contactEntity.toDataContact()
                 ContactItem(
                     contact = contact,
                     onClick = {
@@ -111,6 +125,8 @@ fun SelectContactScreen(navController: NavController) {
                             contactToDelete?.let { contact ->
                                 if (contact.uid.isNotEmpty()) {
                                     coroutineScope.launch {
+                                        // MODIFICAÇÃO: Apaga do Room primeiro, depois do Firebase
+                                        VibeChatApp.database.contactDao().deleteContactByUid(contact.uid)
                                         val result = userRepository.deleteContact(contact.uid)
                                         if (result.isSuccess) {
                                             Toast.makeText(context, "Contato apagado.", Toast.LENGTH_SHORT).show()
@@ -140,6 +156,68 @@ fun SelectContactScreen(navController: NavController) {
                 }
             )
         }
+    }
+
+    @Composable
+    fun HeaderOption(icon: ImageVector, text: String, onClick: () -> Unit) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onClick)
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(imageVector = icon, contentDescription = text, tint = MaterialTheme.colorScheme.primary)
+            Spacer(modifier = Modifier.width(16.dp))
+            Text(text = text, fontWeight = FontWeight.Bold)
+        }
+    }
+
+    @OptIn(ExperimentalGlideComposeApi::class)
+    @Composable
+    fun ContactItem(
+        contact: Contact,
+        onClick: () -> Unit,
+        onDeleteClick: () -> Unit
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onClick)
+                .padding(vertical = 8.dp, horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(50.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.secondaryContainer),
+                contentAlignment = Alignment.Center
+            ) {
+                if (contact.profilePictureUrl != null && contact.profilePictureUrl.isNotEmpty()) {
+                    GlideImage(
+                        model = contact.profilePictureUrl,
+                        contentDescription = "Foto de Perfil de ${contact.customName}",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Filled.Person,
+                        contentDescription = "Sem Foto de Perfil",
+                        modifier = Modifier.size(32.dp),
+                        tint = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.width(16.dp))
+            Text(text = contact.customName, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+
+            IconButton(onClick = onDeleteClick) {
+                Icon(Icons.Filled.Delete, contentDescription = "Apagar Contato", tint = Color.Gray)
+            }
+        }
+        Divider(modifier = Modifier.padding(start = 82.dp))
     }
 }
 

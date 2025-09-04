@@ -21,9 +21,14 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.launch
 
+import com.example.vibechat.VibeChatApp
+import com.example.vibechat.data.local.entities.toDataContact
+import com.example.vibechat.data.local.entities.toContactEntity
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddGroupMembersScreen(navController: NavController, groupId: String) {
+    val allContactsFromRoom by VibeChatApp.database.contactDao().getAllContacts().collectAsState(initial = emptyList())
     var availableContacts by remember { mutableStateOf<List<Contact>>(emptyList()) }
     var selectedContacts by remember { mutableStateOf<Set<Contact>>(emptySet()) }
     var isLoading by remember { mutableStateOf(false) }
@@ -33,23 +38,30 @@ fun AddGroupMembersScreen(navController: NavController, groupId: String) {
     val coroutineScope = rememberCoroutineScope()
     val groupRepository = remember { GroupRepository() }
 
-    // Efeito para buscar os contatos que ainda NÃO estão no grupo
+    // MODIFICADO: Lógica para sincronizar contatos e buscar membros do grupo.
     LaunchedEffect(key1 = groupId) {
         val db = FirebaseFirestore.getInstance()
         val currentUserUid = auth.currentUser?.uid ?: return@LaunchedEffect
 
-        // 1. Pega os membros atuais do grupo
-        db.collection("groups").document(groupId).get().addOnSuccessListener { groupDoc ->
-            val group = groupDoc.toObject(Group::class.java)
-            val currentMemberIds = group?.memberIds ?: emptyList()
-
-            // 2. Pega todos os contatos do usuário
-            db.collection("users").document(currentUserUid).collection("contacts").get()
-                .addOnSuccessListener { contactsSnapshot ->
-                    // 3. Filtra a lista de contatos para remover quem já é membro
-                    availableContacts = contactsSnapshot.toObjects(Contact::class.java)
-                        .filter { !currentMemberIds.contains(it.uid) }
+        // Listener para sincronizar os contatos do Firebase para o Room
+        db.collection("users").document(currentUserUid).collection("contacts")
+            .addSnapshotListener { contactsSnapshot, _ ->
+                val contacts = contactsSnapshot?.toObjects(Contact::class.java) ?: emptyList()
+                coroutineScope.launch {
+                    VibeChatApp.database.contactDao().insertAllContacts(contacts.map { it.toContactEntity() })
                 }
+            }
+
+        // O `LaunchedEffect` que observa a lista do Room para filtrar
+        snapshotFlow { allContactsFromRoom }.collect { contacts ->
+            db.collection("groups").document(groupId).get().addOnSuccessListener { groupDoc ->
+                val group = groupDoc.toObject(Group::class.java)
+                val currentMemberIds = group?.memberIds ?: emptyList()
+                // Filtra a lista de contatos do Room para remover quem já é membro
+                availableContacts = contacts
+                    .filter { it.uid !in currentMemberIds }
+                    .map { it.toDataContact() }
+            }
         }
     }
 

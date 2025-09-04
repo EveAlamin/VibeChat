@@ -1,5 +1,9 @@
 package com.example.vibechat.ui.screens
 
+import android.net.Uri
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -52,7 +56,15 @@ import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.launch
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.foundation.layout.widthIn
-
+import com.google.firebase.storage.FirebaseStorage
+import com.google.firebase.storage.StorageReference
+import kotlinx.coroutines.tasks.await
+import java.util.UUID
+import com.example.vibechat.VibeChatApp
+import com.example.vibechat.data.local.entities.MessageEntity
+import com.example.vibechat.data.local.entities.toDataMessage
+import com.example.vibechat.data.local.entities.toMessageEntity
+import androidx.compose.ui.platform.LocalContext
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ChatScreen(
@@ -63,7 +75,8 @@ fun ChatScreen(
     isGroup: Boolean
 ) {
     var messageText by remember { mutableStateOf("") }
-    var messageList by remember { mutableStateOf<List<Message>>(emptyList()) }
+    // A lista de mensagens agora vem do Room como um Flow
+    val messageListRoom by VibeChatApp.database.messageDao().getMessagesForChat(chatId).collectAsState(initial = emptyList())
     var chatPartner by remember { mutableStateOf<Any?>(null) }
     val membersNames = remember { mutableStateMapOf<String, String>() }
     val senderUid = FirebaseAuth.getInstance().currentUser?.uid!!
@@ -73,18 +86,16 @@ fun ChatScreen(
     var searchQuery by remember { mutableStateOf("") }
     var isSearchActive by remember { mutableStateOf(false) }
     var currentUser by remember { mutableStateOf<User?>(null) }
-
     var pinnedMessage by remember { mutableStateOf<Message?>(null) }
-
     var showDeleteDialog by remember { mutableStateOf(false) }
     var messageToDelete by remember { mutableStateOf<Message?>(null) }
-
     var locallyDeletedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
-
     var isPartnerBlocked by remember { mutableStateOf(false) }
     val userRepository = remember { UserRepository() }
-
     var partnerPresence by remember { mutableStateOf<UserPresence?>(null) }
+    val storage = remember { FirebaseStorage.getInstance() }
+    var isLoadingMedia by remember { mutableStateOf(false) }
+    val context = LocalContext.current // Adiciona esta linha
 
     DisposableEffect(chatId) {
         var presenceListener: ValueEventListener? = null
@@ -104,7 +115,6 @@ fun ChatScreen(
         }
     }
 
-
     LaunchedEffect(chatId) {
         if (!isGroup) {
             isPartnerBlocked = userRepository.isContactBlocked(chatId)
@@ -115,9 +125,9 @@ fun ChatScreen(
     val chatDocumentId = if (isGroup) chatId else getChatRoomId(senderUid, chatId)
     val chatDocRef = db.collection(mainCollection).document(chatDocumentId)
 
-    val visibleMessages by remember(messageList, locallyDeletedIds) {
+    val visibleMessages by remember(messageListRoom, locallyDeletedIds) {
         derivedStateOf {
-            messageList.filter { it.id !in locallyDeletedIds }
+            messageListRoom.filter { it.id !in locallyDeletedIds }.map { it.toDataMessage() }
         }
     }
 
@@ -191,7 +201,7 @@ fun ChatScreen(
             db.collection("chats").document(receiverRoomId)
                 .collection("messages").document(message.id).update(updatedData)
         }
-        if (messageList.lastOrNull()?.id == message.id) {
+        if (visibleMessages.lastOrNull()?.id == message.id) {
             updateLastMessage(db, chatId, "🚫 Mensagem apagada", isGroup, currentUser)
         }
     }
@@ -254,15 +264,21 @@ fun ChatScreen(
             }
         }
 
+        // NOVO: Listener do Firebase para sincronizar com o Room
         val messagesListener = chatDocRef.collection("messages")
             .orderBy("timestamp", Query.Direction.ASCENDING)
             .addSnapshotListener { snapshot, e ->
                 if (e != null || snapshot == null) return@addSnapshotListener
-                messageList = snapshot.documents.mapNotNull { it.toObject(Message::class.java) }
+                val messages = snapshot.documents.mapNotNull { it.toObject(Message::class.java) }
 
-                db.collection("users").document(senderUid)
-                    .collection("conversations").document(chatId)
-                    .update("unreadCount", 0)
+                coroutineScope.launch {
+                    val messageEntities = messages.map { it.toMessageEntity(chatId) }
+                    VibeChatApp.database.messageDao().insertAllMessages(messageEntities)
+
+                    db.collection("users").document(senderUid)
+                        .collection("conversations").document(chatId)
+                        .update("unreadCount", 0)
+                }
             }
 
         onDispose {
@@ -273,6 +289,46 @@ fun ChatScreen(
         }
     }
 
+    // NOVO: Lançador de atividade para selecionar mídia
+    val imagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let {
+            isLoadingMedia = true
+            coroutineScope.launch {
+                val storageRef = storage.reference.child("chat_media/${UUID.randomUUID()}")
+                try {
+                    val uploadTask = storageRef.putFile(it).await()
+                    val downloadUrl = uploadTask.storage.downloadUrl.await().toString()
+
+                    val messageObject = Message(
+                        id = db.collection("chats").document().id,
+                        senderId = senderUid,
+                        timestamp = Timestamp.now(),
+                        readBy = listOf(senderUid),
+                        imageUrl = downloadUrl,
+                        message = "Foto"
+                    )
+
+                    // Primeiro salva no Room
+                    VibeChatApp.database.messageDao().insertMessage(messageObject.toMessageEntity(chatId))
+
+                    // Depois envia para o Firebase
+                    chatDocRef.collection("messages").document(messageObject.id).set(messageObject)
+                    if (!isGroup) {
+                        val receiverRoomId = getChatRoomId(chatId, senderUid)
+                        db.collection("chats").document(receiverRoomId)
+                            .collection("messages").document(messageObject.id).set(messageObject)
+                    }
+                    updateLastMessage(db, chatId, "Foto", isGroup, currentUser)
+                } catch (e: Exception) {
+                    Toast.makeText(context, "Erro ao enviar mídia.", Toast.LENGTH_SHORT).show()
+                } finally {
+                    isLoadingMedia = false
+                }
+            }
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -401,6 +457,20 @@ fun ChatScreen(
                     }
                 } else {
                     Row(modifier = Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(
+                            onClick = { imagePickerLauncher.launch("image/*") },
+                            enabled = !isLoadingMedia
+                        ) {
+                            if (isLoadingMedia) {
+                                CircularProgressIndicator(modifier = Modifier.size(24.dp), color = MaterialTheme.colorScheme.primary)
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Default.Attachment,
+                                    contentDescription = "Anexar mídia",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
                         TextField(
                             value = messageText,
                             onValueChange = { messageText = it },
@@ -417,7 +487,7 @@ fun ChatScreen(
                             onClick = {
                                 if (messageText.isNotBlank() && currentUser != null) {
                                     val currentMessage = messageText
-                                    val messageId = db.collection("chats").document().id
+                                    val messageId = UUID.randomUUID().toString()
                                     val messageObject = Message(
                                         id = messageId,
                                         message = currentMessage,
@@ -427,6 +497,10 @@ fun ChatScreen(
                                     )
 
                                     coroutineScope.launch {
+                                        // Primeiro salva no Room
+                                        VibeChatApp.database.messageDao().insertMessage(messageObject.toMessageEntity(chatId))
+
+                                        // Depois envia para o Firebase
                                         chatDocRef.collection("messages").document(messageId).set(messageObject)
                                         if (!isGroup) {
                                             val receiverRoomId = getChatRoomId(chatId, senderUid)
@@ -447,6 +521,30 @@ fun ChatScreen(
                 }
             }
         }
+    )
+}
+
+// Funções de conversão para o Room
+fun Message.toMessageEntity(chatId: String): MessageEntity {
+    return MessageEntity(
+        id = this.id,
+        chatId = chatId,
+        message = this.message,
+        senderId = this.senderId,
+        timestamp = this.timestamp?.seconds,
+        imageUrl = this.imageUrl,
+        videoUrl = this.videoUrl
+    )
+}
+
+fun MessageEntity.toDataMessage(): Message {
+    return Message(
+        id = this.id,
+        message = this.message,
+        senderId = this.senderId,
+        timestamp = this.timestamp?.let { Timestamp(it, 0) },
+        imageUrl = this.imageUrl,
+        videoUrl = this.videoUrl
     )
 }
 
@@ -757,6 +855,7 @@ private fun updateLastMessage(db: FirebaseFirestore, chatId: String, lastMessage
     }
 }
 
+@OptIn(ExperimentalGlideComposeApi::class)
 @Composable
 fun ReceivedMessageBubble(message: Message, senderName: String?, searchQuery: String) {
     val configuration = LocalConfiguration.current
@@ -789,7 +888,14 @@ fun ReceivedMessageBubble(message: Message, senderName: String?, searchQuery: St
                     )
                 }
 
-                Row(verticalAlignment = Alignment.Bottom) {
+                if (message.imageUrl != null) {
+                    GlideImage(
+                        model = message.imageUrl,
+                        contentDescription = "Imagem do chat",
+                        modifier = Modifier.size(200.dp).clip(RoundedCornerShape(12.dp)),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
                     Box(modifier = Modifier.weight(1f, fill = false)) {
                         if (message.wasDeleted) {
                             Text(
@@ -805,18 +911,21 @@ fun ReceivedMessageBubble(message: Message, senderName: String?, searchQuery: St
                             )
                         }
                     }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = formatTimestamp(message.timestamp),
-                        fontSize = 10.sp,
-                        color = Color.Gray
-                    )
                 }
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                Text(
+                    text = formatTimestamp(message.timestamp),
+                    fontSize = 10.sp,
+                    color = Color.Gray
+                )
             }
         }
     }
 }
 
+@OptIn(ExperimentalGlideComposeApi::class)
 @Composable
 fun SentMessageBubble(
     message: Message,
@@ -844,25 +953,25 @@ fun SentMessageBubble(
                 .background(Color(0xFFDCF8C6))
                 .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
-            Row(verticalAlignment = Alignment.Bottom) {
-                Box(modifier = Modifier.weight(1f, fill = false)) {
-                    if (message.wasDeleted) {
-                        Text(
-                            text = message.message ?: "",
-                            fontStyle = FontStyle.Italic,
-                            color = Color.Gray
-                        )
-                    } else {
-                        HighlightText(
-                            text = message.message ?: "",
-                            query = searchQuery,
-                            color = Color.Yellow
-                        )
-                    }
+            Column {
+                if (message.imageUrl != null) {
+                    GlideImage(
+                        model = message.imageUrl,
+                        contentDescription = "Imagem do chat",
+                        modifier = Modifier.size(200.dp).clip(RoundedCornerShape(12.dp)),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    HighlightText(
+                        text = message.message ?: "",
+                        query = searchQuery,
+                        color = Color.Yellow
+                    )
                 }
-                Spacer(modifier = Modifier.width(8.dp))
+
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(top = 4.dp)
                 ) {
                     Text(
                         text = formatTimestamp(message.timestamp),
@@ -881,6 +990,7 @@ fun SentMessageBubble(
         }
     }
 }
+
 
 @Composable
 fun MessageStatusIcon(

@@ -32,12 +32,26 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.launch
 
+// Adiciona estas novas importações no topo do arquivo
+import com.example.vibechat.VibeChatApp
+import com.example.vibechat.data.local.entities.toDataUser
+import com.example.vibechat.data.local.entities.toGroupEntity
+import com.example.vibechat.data.local.entities.toUserEntity
+import com.example.vibechat.data.local.entities.toDataGroup
+import com.example.vibechat.data.local.entities.toDataContact
+import com.example.vibechat.data.local.entities.toContactEntity
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalGlideComposeApi::class)
 @Composable
 fun GroupDetailsScreen(navController: NavController, groupId: String) {
-    var group by remember { mutableStateOf<Group?>(null) }
+    val groupEntity by VibeChatApp.database.groupDao().getGroupById(groupId).collectAsState(initial = null)
+    val group = groupEntity?.let { it.toDataGroup() }
     var members by remember { mutableStateOf<List<User>>(emptyList()) }
-    var contactNames by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    val contactListFromRoom by VibeChatApp.database.contactDao().getAllContacts().collectAsState(initial = emptyList())
+    val contactNames by remember(contactListFromRoom) {
+        derivedStateOf { contactListFromRoom.associateBy({ it.uid }, { it.customName }) }
+    }
+
     val currentUserUid = FirebaseAuth.getInstance().currentUser?.uid
     val coroutineScope = rememberCoroutineScope()
     val groupRepository = remember { GroupRepository() }
@@ -54,34 +68,42 @@ fun GroupDetailsScreen(navController: NavController, groupId: String) {
 
     DisposableEffect(groupId) {
         val db = FirebaseFirestore.getInstance()
-        val contactsListener = db.collection("users").document(currentUserUid!!)
-            .collection("contacts")
-            .addSnapshotListener { snapshot, _ ->
-                if (snapshot != null) {
-                    contactNames = snapshot.toObjects(Contact::class.java)
-                        .associateBy({ it.uid }, { it.customName })
-                }
-            }
-
         val groupListener = db.collection("groups").document(groupId)
             .addSnapshotListener { groupSnapshot, _ ->
                 val groupData = groupSnapshot?.toObject(Group::class.java)
-                group = groupData
-                if (groupData != null && groupData.memberIds.isNotEmpty()) {
-                    db.collection("users").whereIn("uid", groupData.memberIds)
-                        .addSnapshotListener { usersSnapshot, _ ->
-                            members = usersSnapshot?.toObjects(User::class.java) ?: emptyList()
+                groupData?.let {
+                    coroutineScope.launch {
+                        // Salva/Atualiza o grupo no Room
+                        VibeChatApp.database.groupDao().insertGroup(it.toGroupEntity())
+
+                        // Sincroniza os membros do grupo para o Room
+                        if (it.memberIds.isNotEmpty()) {
+                            db.collection("users").whereIn("uid", it.memberIds)
+                                .get().addOnSuccessListener { usersSnapshot ->
+                                    val newMembers = usersSnapshot.toObjects(User::class.java)
+                                    members = newMembers
+                                    coroutineScope.launch {
+                                        VibeChatApp.database.userDao().insertAllUsers(newMembers.map { user -> user.toUserEntity() })
+                                    }
+                                }
                         }
-                } else {
-                    members = emptyList()
-                    if (groupData != null && groupData.memberIds.isEmpty()) {
-                        navController.popBackStack()
                     }
                 }
+                // Se o grupo for apagado (sem membros), navega de volta
+                if (groupData?.memberIds?.isEmpty() == true) {
+                    navController.popBackStack()
+                }
             }
+        // Listener para apagar o grupo se ele for removido
+        val groupRef = db.collection("groups").document(groupId)
+        val deletionListener = groupRef.addSnapshotListener { snapshot, _ ->
+            if (snapshot != null && !snapshot.exists()) {
+                navController.popBackStack()
+            }
+        }
         onDispose {
             groupListener.remove()
-            contactsListener.remove()
+            deletionListener.remove()
         }
     }
 

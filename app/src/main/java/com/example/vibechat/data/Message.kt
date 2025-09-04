@@ -10,5 +10,11 @@ data class Message(
     val timestamp: Timestamp? = null,
     val status: String = "SENT",
     val wasDeleted: Boolean = false,
-    val readBy: List<String> = emptyList()
+    val readBy: List<String> = emptyList(),
+    val imageUrl: String? = null,
+    val videoUrl: String? = null,
+    // CAMPOS ADICIONADOS PARA COMPATIBILIDADE COM A VERSÃO ANTERIOR
+    val receiverId: String? = null,
+    val mediaUrl: String? = null,
+    val mediaType: String? = null
 )

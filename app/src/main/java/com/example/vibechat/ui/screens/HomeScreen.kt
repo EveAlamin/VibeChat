@@ -29,6 +29,12 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
 import androidx.compose.ui.text.style.TextOverflow
+import com.example.vibechat.VibeChatApp
+import com.example.vibechat.data.local.entities.toDataContact
+import com.example.vibechat.data.local.entities.toDataConversation
+import com.example.vibechat.data.local.entities.toContactEntity
+import com.example.vibechat.data.local.entities.toConversationEntity
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -139,16 +145,39 @@ fun SearchAndFilterSection(
 
 @Composable
 fun ConversationsScreen(navController: NavController, searchQuery: String, selectedFilter: String) {
-    var conversationList by remember { mutableStateOf<List<Conversation>>(emptyList()) }
-    var contactList by remember { mutableStateOf<Map<String, String>>(emptyMap()) } // Map<UID, CustomName>
+    // A fonte de dados agora é o Room
+    val conversationList by VibeChatApp.database.conversationDao().getAllConversations().collectAsState(initial = emptyList())
+    val contactList by VibeChatApp.database.contactDao().getAllContacts().collectAsState(initial = emptyList())
     val auth = FirebaseAuth.getInstance()
     val db = FirebaseFirestore.getInstance()
     val currentUserUid = auth.currentUser?.uid
     var blockedUserIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    val coroutineScope = rememberCoroutineScope()
 
-    // Listener para buscar a lista de utilizadores bloqueados
+    // NOVO: Listener do Firebase para sincronizar com o Room
     LaunchedEffect(currentUserUid) {
         if (currentUserUid != null) {
+            // Sincroniza conversas
+            db.collection("users").document(currentUserUid).collection("conversations")
+                .addSnapshotListener { snapshot, e ->
+                    if (e == null && snapshot != null) {
+                        val conversations = snapshot.documents.mapNotNull { it.toObject(Conversation::class.java) }
+                        coroutineScope.launch {
+                            VibeChatApp.database.conversationDao().insertAllConversations(conversations.map { it.toConversationEntity() })
+                        }
+                    }
+                }
+            // Sincroniza contatos
+            db.collection("users").document(currentUserUid).collection("contacts")
+                .addSnapshotListener { snapshot, e ->
+                    if (e == null && snapshot != null) {
+                        val contacts = snapshot.documents.mapNotNull { it.toObject(Contact::class.java) }
+                        coroutineScope.launch {
+                            VibeChatApp.database.contactDao().insertAllContacts(contacts.map { it.toContactEntity() })
+                        }
+                    }
+                }
+            // Sincroniza usuários bloqueados
             db.collection("users").document(currentUserUid)
                 .collection("blockedUsers")
                 .addSnapshotListener { snapshot, _ ->
@@ -159,41 +188,13 @@ fun ConversationsScreen(navController: NavController, searchQuery: String, selec
         }
     }
 
-    // Listener para buscar os seus contactos e mapear UID -> Nome Personalizado
-    LaunchedEffect(currentUserUid) {
-        if (currentUserUid != null) {
-            db.collection("users").document(currentUserUid).collection("contacts")
-                .addSnapshotListener { snapshot, _ ->
-                    if (snapshot != null) {
-                        contactList = snapshot.documents.mapNotNull { doc ->
-                            val contact = doc.toObject(Contact::class.java)
-                            contact?.uid to contact?.customName
-                        }.filter { it.first != null && it.second != null && it.second!!.isNotEmpty() }
-                            .associate { it.first!! to it.second!! }
-                    }
-                }
-        }
-    }
-
-    // Listener para buscar as suas conversas
-    LaunchedEffect(currentUserUid) {
-        if (currentUserUid != null) {
-            db.collection("users").document(currentUserUid).collection("conversations")
-                .orderBy("timestamp", Query.Direction.DESCENDING)
-                .addSnapshotListener { snapshot, e ->
-                    if (e == null && snapshot != null) {
-                        conversationList = snapshot.documents.mapNotNull { it.toObject(Conversation::class.java) }
-                    }
-                }
-        }
-    }
-
-    // Combina as listas para criar a lista de exibição final
+    // Combina as listas do Room para criar a lista de exibição final
     val displayList by remember(conversationList, contactList) {
         derivedStateOf {
-            conversationList.map { conversation ->
-                val customName = contactList[conversation.partnerId]
-                conversation.copy(partnerName = customName ?: conversation.partnerName)
+            val contactMap = contactList.associateBy({ it.uid }, { it.customName })
+            conversationList.map { conversationEntity ->
+                val customName = contactMap[conversationEntity.partnerId]
+                conversationEntity.toDataConversation().copy(partnerName = customName ?: conversationEntity.partnerName)
             }
         }
     }

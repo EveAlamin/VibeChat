@@ -27,20 +27,49 @@ import com.example.vibechat.data.User
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.storage.FirebaseStorage
+import kotlinx.coroutines.launch
+
+// NOVAS IMPORTAÇÕES NECESSÁRIAS PARA O ROOM
+import com.example.vibechat.VibeChatApp
+import com.example.vibechat.data.local.entities.toDataUser
+import com.example.vibechat.data.local.entities.toUserEntity
+import com.example.vibechat.repository.UserRepository
+import kotlinx.coroutines.tasks.await
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalGlideComposeApi::class)
 @Composable
 fun ProfileScreen(navController: NavController) {
-    var user by remember { mutableStateOf<User?>(null) }
     val auth = FirebaseAuth.getInstance()
     val db = FirebaseFirestore.getInstance()
     val storage = FirebaseStorage.getInstance()
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    val userRepository = remember { UserRepository() }
+
+    val currentUserUid = auth.currentUser?.uid ?: ""
+
+    // MODIFICADO: Lendo o utilizador a partir do Room
+    val userEntity by VibeChatApp.database.userDao().getUserById(currentUserUid).collectAsState(initial = null)
+    val user = userEntity?.let { it.toDataUser() }
 
     var showEditNameDialog by remember { mutableStateOf(false) }
     var showEditStatusDialog by remember { mutableStateOf(false) }
-    var newName by remember { mutableStateOf("") }
-    var newStatus by remember { mutableStateOf("") }
+    var newName by remember { mutableStateOf(user?.name ?: "") }
+    var newStatus by remember { mutableStateOf(user?.status ?: "") }
+
+    // MODIFICADO: Sincronização do Firebase para o Room
+    LaunchedEffect(currentUserUid) {
+        if (currentUserUid.isNotEmpty()) {
+            db.collection("users").document(currentUserUid).addSnapshotListener { snapshot, _ ->
+                val userData = snapshot?.toObject(User::class.java)
+                userData?.let {
+                    coroutineScope.launch {
+                        VibeChatApp.database.userDao().insertUser(it.toUserEntity())
+                    }
+                }
+            }
+        }
+    }
 
     val imagePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -48,24 +77,20 @@ fun ProfileScreen(navController: NavController) {
         uri?.let {
             val uid = auth.currentUser?.uid
             if (uid != null) {
-                val storageRef = storage.reference.child("profile_pictures/$uid")
-                storageRef.putFile(it)
-                    .addOnSuccessListener {
-                        storageRef.downloadUrl.addOnSuccessListener { downloadUrl ->
-                            db.collection("users").document(uid).update("profilePictureUrl", downloadUrl.toString())
-                        }
-                    }
-            }
-        }
-    }
+                coroutineScope.launch {
+                    try {
+                        val storageRef = storage.reference.child("profile_pictures/$uid")
+                        val uploadTask = storageRef.putFile(it).await()
+                        val downloadUrl = uploadTask.storage.downloadUrl.await().toString()
 
-    LaunchedEffect(Unit) {
-        val uid = auth.currentUser?.uid
-        if (uid != null) {
-            db.collection("users").document(uid).addSnapshotListener { snapshot, _ ->
-                user = snapshot?.toObject(User::class.java)
-                newName = user?.name ?: ""
-                newStatus = user?.status ?: ""
+                        // MODIFICADO: Chama o novo método do repositório
+                        userRepository.updateUserProfilePicture(uid, downloadUrl)
+
+                        Toast.makeText(context, "Foto de perfil atualizada.", Toast.LENGTH_SHORT).show()
+                    } catch (e: Exception) {
+                        Toast.makeText(context, "Erro ao fazer o upload da imagem.", Toast.LENGTH_SHORT).show()
+                    }
+                }
             }
         }
     }
@@ -126,14 +151,20 @@ fun ProfileScreen(navController: NavController) {
                 icon = Icons.Default.Person,
                 title = "Nome",
                 subtitle = user?.name ?: "Sem nome",
-                onClick = { showEditNameDialog = true }
+                onClick = {
+                    newName = user?.name ?: ""
+                    showEditNameDialog = true
+                }
             )
             Divider(modifier = Modifier.padding(start = 56.dp))
             ProfileInfoRow(
                 icon = Icons.Default.Info,
                 title = "Recado",
                 subtitle = user?.status ?: "Disponível",
-                onClick = { showEditStatusDialog = true }
+                onClick = {
+                    newStatus = user?.status ?: ""
+                    showEditStatusDialog = true
+                }
             )
             Divider(modifier = Modifier.padding(start = 56.dp))
             ProfileInfoRow(
@@ -152,11 +183,11 @@ fun ProfileScreen(navController: NavController) {
             onDismiss = { showEditNameDialog = false },
             onConfirm = { updatedName ->
                 auth.currentUser?.uid?.let { uid ->
-                    db.collection("users").document(uid).update("name", updatedName)
-                        .addOnSuccessListener {
-                            Toast.makeText(context, "Nome atualizado.", Toast.LENGTH_SHORT).show()
-                            showEditNameDialog = false
-                        }
+                    coroutineScope.launch {
+                        // MODIFICADO: Chama o repositório para sincronizar Room e Firebase
+                        userRepository.updateUserName(uid, updatedName)
+                        showEditNameDialog = false
+                    }
                 }
             }
         )
@@ -169,17 +200,17 @@ fun ProfileScreen(navController: NavController) {
             onDismiss = { showEditStatusDialog = false },
             onConfirm = { updatedStatus ->
                 auth.currentUser?.uid?.let { uid ->
-                    db.collection("users").document(uid).update("status", updatedStatus)
-                        .addOnSuccessListener {
-                            Toast.makeText(context, "Recado atualizado.", Toast.LENGTH_SHORT).show()
-                            showEditStatusDialog = false
-                        }
+                    coroutineScope.launch {
+                        // MODIFICADO: Chama o repositório para sincronizar Room e Firebase
+                        userRepository.updateUserStatus(uid, updatedStatus)
+                        showEditStatusDialog = false
+                    }
                 }
             }
         )
     }
 }
-
+// As funções ProfileInfoRow e EditInfoDialog permanecem as mesmas
 @Composable
 fun ProfileInfoRow(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, subtitle: String, onClick: () -> Unit) {
     Row(

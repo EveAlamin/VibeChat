@@ -30,12 +30,19 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.launch
 
+// NOVAS IMPORTAÇÕES NECESSÁRIAS PARA O ROOM
+import com.example.vibechat.VibeChatApp
+import com.example.vibechat.data.local.entities.toDataContact
+import com.example.vibechat.data.local.entities.toContactEntity
+
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalGlideComposeApi::class)
 @Composable
 fun CreateGroupScreen(navController: NavController) {
     var groupName by remember { mutableStateOf("") }
     var imageUri by remember { mutableStateOf<Uri?>(null) }
-    var contactList by remember { mutableStateOf<List<Contact>>(emptyList()) }
+    // MODIFICADO: A lista de contatos é agora lida do Room
+    val contactList by VibeChatApp.database.contactDao().getAllContacts().collectAsState(initial = emptyList())
     var selectedContacts by remember { mutableStateOf<Set<Contact>>(emptySet()) }
     var isLoading by remember { mutableStateOf(false) }
 
@@ -44,20 +51,25 @@ fun CreateGroupScreen(navController: NavController) {
     val coroutineScope = rememberCoroutineScope()
     val groupRepository = remember { GroupRepository() }
 
+    // MODIFICADO: O DisposableEffect agora sincroniza dados do Firebase para o Room
     DisposableEffect(auth.currentUser?.uid) {
         val currentUser = auth.currentUser ?: return@DisposableEffect onDispose {}
+
         val db = FirebaseFirestore.getInstance()
         val contactsRef = db.collection("users").document(currentUser.uid).collection("contacts")
 
         val listener = contactsRef.addSnapshotListener { contactsSnapshot, error ->
             if (error != null || contactsSnapshot == null) {
-                contactList = emptyList()
                 return@addSnapshotListener
             }
-            contactList = contactsSnapshot.toObjects(Contact::class.java)
+            val contacts = contactsSnapshot.toObjects(Contact::class.java)
+            coroutineScope.launch {
+                VibeChatApp.database.contactDao().insertAllContacts(contacts.map { it.toContactEntity() })
+            }
         }
         onDispose { listener.remove() }
     }
+
 
     val imagePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent(),
@@ -160,7 +172,9 @@ fun CreateGroupScreen(navController: NavController) {
             )
 
             LazyColumn {
-                items(contactList) { contact ->
+                // MODIFICADO: A lista de contatos vem do Room
+                items(contactList) { contactEntity ->
+                    val contact = contactEntity.toDataContact()
                     ContactSelectionItem(
                         contact = contact,
                         isSelected = selectedContacts.contains(contact),
@@ -179,7 +193,7 @@ fun CreateGroupScreen(navController: NavController) {
         }
     }
 }
-
+// As funções ContactSelectionItem e outras permanecem as mesmas
 @OptIn(ExperimentalGlideComposeApi::class)
 @Composable
 fun ContactSelectionItem(
