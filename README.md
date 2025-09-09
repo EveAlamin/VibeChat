@@ -45,7 +45,7 @@ O VibeChat está equipado com um conjunto completo de funcionalidades para uma c
 
 ### 1. Clonar o Repositório
 ```bash
-git clone https://github.com/teu-username/vibechat.git
+git clone https://github.com/EveAlamin/vibechat.git
 
 
 
